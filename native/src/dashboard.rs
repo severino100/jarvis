@@ -17,6 +17,8 @@ use eframe::egui::{self, pos2, vec2, Align, Align2, Color32, CornerRadius, FontI
 
 /// What the start screen shows besides the board (collected by the app each frame).
 pub struct Extras {
+    /// The dev mode is on (otherwise the screen has no board blocks).
+    pub dev: bool,
     pub meetings: Vec<Event>,
     pub todos: Vec<Todo>,
     /// (title, id, open comments, url)
@@ -68,8 +70,9 @@ fn panel(ui: &mut Ui, acc: Accent, add: impl FnOnce(&mut Ui)) {
     ui_kit::hud_panel(ui, acc, false, add);
 }
 
-/// `since`: seconds since the screen was opened, for the staggered entrance of its blocks.
-pub fn view(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<View>, since: f32) {
+/// `since`: seconds since the screen was opened, for the staggered entrance of its blocks. Without the board (`d`
+/// None: the dev mode is off) the screen is the personal one: agenda, tasks, conversations, system and music.
+pub fn view(ui: &mut Ui, d: Option<&Dashboard>, x: &Extras, acc: Accent, go: &mut Option<View>, since: f32) {
     // Leave room for the scroll bar on the right, which floats over the content.
     ui.set_max_width(ui.available_width() - 16.0);
     let enter = |ui: &mut Ui, order: usize| stagger(ui, since, order);
@@ -78,6 +81,10 @@ pub fn view(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option
         hero(ui, d, acc);
     });
     ui.add_space(14.0);
+    let Some(d) = d else {
+        personal(ui, x, acc, go, since);
+        return;
+    };
     ui.scope(|ui| {
         enter(ui, 1);
         work(ui, d, x, acc, go);
@@ -99,7 +106,7 @@ pub fn view(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option
             ui.allocate_ui_with_layout(vec2(b, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_width(b);
                 enter(ui, 2);
-                focus(ui, d, x, acc, go);
+                focus(ui, x, acc, go);
             });
             ui.allocate_ui_with_layout(vec2(c, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_width(c);
@@ -113,7 +120,7 @@ pub fn view(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option
             stagger(&mut cols[0], since, 1);
             core(&mut cols[0], d, acc, go);
             stagger(&mut cols[1], since, 2);
-            focus(&mut cols[1], d, x, acc, go);
+            focus(&mut cols[1], x, acc, go);
         });
         ui.add_space(14.0);
         ui.columns(2, |cols| {
@@ -127,7 +134,7 @@ pub fn view(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option
     } else {
         core(ui, d, acc, go);
         ui.add_space(12.0);
-        focus(ui, d, x, acc, go);
+        focus(ui, x, acc, go);
         ui.add_space(12.0);
         system(ui, x, acc, go);
     }
@@ -147,27 +154,75 @@ pub fn view(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option
     });
 }
 
+/// Hoje without the board: the conversation first, then the day (agenda and tasks), then the machine and the music.
+fn personal(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>, since: f32) {
+    let w = ui.available_width();
+    if w > 1100.0 {
+        let gap = 18.0;
+        let (a, b) = ((w - 2.0 * gap) * 0.3, (w - 2.0 * gap) * 0.4);
+        let c = w - 2.0 * gap - a - b;
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing.x = gap;
+            ui.allocate_ui_with_layout(vec2(a, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(a);
+                stagger(ui, since, 1);
+                conversations(ui, x, acc, go);
+            });
+            ui.allocate_ui_with_layout(vec2(b, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(b);
+                stagger(ui, since, 2);
+                focus(ui, x, acc, go);
+                ui.add_space(14.0);
+                todos(ui, x, acc, go);
+            });
+            ui.allocate_ui_with_layout(vec2(c, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(c);
+                stagger(ui, since, 3);
+                telemetry(ui, x, acc, go);
+                ui.add_space(14.0);
+                music(ui, x, acc, go);
+            });
+        });
+    } else if w > 700.0 {
+        ui.columns(2, |cols| {
+            stagger(&mut cols[0], since, 1);
+            conversations(&mut cols[0], x, acc, go);
+            cols[0].add_space(14.0);
+            todos(&mut cols[0], x, acc, go);
+            stagger(&mut cols[1], since, 2);
+            focus(&mut cols[1], x, acc, go);
+            cols[1].add_space(14.0);
+            music(&mut cols[1], x, acc, go);
+            cols[1].add_space(14.0);
+            telemetry(&mut cols[1], x, acc, go);
+        });
+    } else {
+        conversations(ui, x, acc, go);
+        ui.add_space(12.0);
+        focus(ui, x, acc, go);
+        ui.add_space(12.0);
+        todos(ui, x, acc, go);
+        ui.add_space(12.0);
+        music(ui, x, acc, go);
+    }
+}
+
 /* ---------- hero: greeting, date, live clock, sprint ---------- */
 
-fn hero(ui: &mut Ui, d: &Dashboard, acc: Accent) {
+fn hero(ui: &mut Ui, d: Option<&Dashboard>, acc: Accent) {
     let now = Local::now();
-    let first = d.me.name.split_whitespace().next().unwrap_or("");
-    let days_left = ui_kit::parse(&d.sprint.finish).map(|f| (f.date_naive() - now.date_naive()).num_days().max(0)).unwrap_or(0);
+    let name = d.map(|d| d.me.name.clone()).unwrap_or_else(crate::profile::name);
+    let first = name.split_whitespace().next().unwrap_or("");
+    let mut date = format!("{}, {} de {}", ui_kit::WEEKDAYS[now.weekday().num_days_from_monday() as usize], now.day(), LONG_MONTHS[now.month0() as usize]);
+    if let Some(d) = d {
+        let days_left = ui_kit::parse(&d.sprint.finish).map(|f| (f.date_naive() - now.date_naive()).num_days().max(0)).unwrap_or(0);
+        let left = if days_left == 0 { "último dia".to_owned() } else { format!("faltam {days_left} {}", if days_left == 1 { "dia" } else { "dias" }) };
+        date = format!("{date} · {} · {left}", d.sprint.name);
+    }
     ui.horizontal(|ui| {
         ui.vertical(|ui| {
             ui.label(RichText::new(format!("{}, {first}.", greeting(now.hour()))).font(display(size::HERO)).color(theme::BRIGHT));
-            ui.label(
-                RichText::new(format!(
-                    "{}, {} de {} · {} · {}",
-                    ui_kit::WEEKDAYS[now.weekday().num_days_from_monday() as usize],
-                    now.day(),
-                    LONG_MONTHS[now.month0() as usize],
-                    d.sprint.name,
-                    if days_left == 0 { "último dia".to_owned() } else { format!("faltam {days_left} {}", if days_left == 1 { "dia" } else { "dias" }) }
-                ))
-                .monospace()
-                .color(theme::MUTED),
-            );
+            ui.label(RichText::new(date).monospace().color(theme::MUTED));
         });
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             // The clock: hours and minutes large, seconds as a sweeping tick bar under them.
@@ -257,7 +312,7 @@ fn core(ui: &mut Ui, d: &Dashboard, acc: Accent, go: &mut Option<View>) {
 /* ---------- focus: the item to work on, and today's timeline ---------- */
 
 /// Today's timeline (the item to work on now lives in the Trabalho block above).
-fn focus(ui: &mut Ui, _d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<View>) {
+fn focus(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
     heading(ui, "Hoje na agenda", acc, Some(View::Agenda), go);
     panel(ui, acc, |ui| timeline(ui, &x.meetings, acc));
 }
@@ -378,8 +433,17 @@ fn telemetry(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
 }
 
 fn conversations(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
-    heading(ui, "Conversas a trabalhar", acc, Some(View::Chat), go);
+    heading(ui, if x.dev { "Conversas a trabalhar" } else { "Conversas" }, acc, Some(View::Chat), go);
     panel(ui, acc, |ui| {
+        // The personal screen starts from a conversation: write, summarise, analyse, propose.
+        if !x.dev {
+            ui.label(RichText::new("Pede ao Jarvis o que precisares: um email difícil, o resumo de uma reunião, uma análise. Ele propõe; és tu que envias.").color(theme::TEXT));
+            ui.add_space(6.0);
+            if button(ui, "Nova conversa", true, acc).clicked() {
+                crate::app::post(crate::app::AppEvent::NewChat);
+            }
+            ui.add_space(8.0);
+        }
         if x.busy.is_empty() {
             ui.label(RichText::new("Nenhuma conversa a trabalhar agora.").color(theme::MUTED));
             return;

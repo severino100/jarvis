@@ -54,6 +54,7 @@ fn main() -> eframe::Result {
     if std::env::args().any(|a| a == "--profile") {
         let p = profile::get();
         println!("nome {} ({}) | projetos {} | principal {}", p.name, p.spoken_name, p.projects_dir, profile::main_dir().display());
+        println!("modos {:?} | dev {} | rh {}", profile::modes(), profile::dev(), profile::has_mode(profile::RH));
         match profile::pack() {
             Some(pk) => println!("pacote {} em {} | board {} | skill {:?} | cli {:?} | plugin {:?}", pk.m.name, pk.dir.display(), profile::board().is_some(), profile::skill_command(), profile::skill_cli(), profile::plugin_dir()),
             None => println!("sem pacote"),

@@ -54,6 +54,16 @@ const NAV: [(View, &str); 10] = [
     (View::Cleanup, "Limpeza"),
 ];
 
+/// Views of the development mode (board, PRs, hours, cleanup): not in the menu when that mode is off.
+fn dev_only(v: View) -> bool {
+    matches!(v, View::Now | View::Prs | View::Review | View::Refined | View::Hours | View::Cleanup)
+}
+
+/// Whether a view belongs to the modes that are on (Definições → O meu Jarvis).
+pub fn shown(v: View) -> bool {
+    !dev_only(v) || crate::profile::dev()
+}
+
 #[derive(Clone)]
 pub enum AppEvent {
     Show,
@@ -64,6 +74,8 @@ pub enum AppEvent {
     Quit,
     OpenUrl(String),
     OpenChat(String),
+    /// A new general conversation, opened in the Chat view.
+    NewChat,
     Go(View),
     /// Something changed (a notice): just draw a new frame.
     Repaint,
@@ -252,6 +264,11 @@ impl eframe::App for JarvisApp {
                 }
                 AppEvent::OpenUrl(u) => brain::open(&u),
                 AppEvent::OpenChat(id) => self.open_window(&id),
+                AppEvent::NewChat => {
+                    self.chat_ui.selected = Some(self.chats.create(None, None, None));
+                    self.view = View::Chat;
+                    Self::show_window(ctx);
+                }
                 AppEvent::Go(v) => {
                     self.view = v;
                     Self::show_window(ctx);
@@ -325,6 +342,10 @@ impl eframe::App for JarvisApp {
         let speed = if motion::reduced() { 0.5 } else { 1.0 + 2.6 * energy };
         self.reactor_phase += dt * speed;
         let t = self.reactor_phase;
+        // A view of a mode that was switched off (or asked for by a screenshot) falls back to Hoje.
+        if !shown(self.view) {
+            self.view = View::Today;
+        }
 
         egui::Panel::left("nav")
             .exact_size(256.0)
@@ -414,8 +435,11 @@ impl JarvisApp {
         let board = self.board.clone();
         let voice_on = self.voice.with(|v| v.on);
         let mut talk = false;
+        let dev = crate::profile::dev();
+        let me = if dev { None } else { Some(crate::profile::name()) };
         board.with(|b| {
-            let d = b.data.as_ref();
+            // Without the dev mode the board is not part of the screen (nor its sprint box and refresh).
+            let d = b.data.as_ref().filter(|_| dev);
             ui.horizontal(|ui| {
                 let (rect, r) = ui.allocate_exact_size(vec2(52.0, 52.0), Sense::click());
                 paint_reactor(ui, rect, acc, t, energy, 1.0);
@@ -426,27 +450,29 @@ impl JarvisApp {
                 ui.vertical(|ui| {
                     ui.add_space(6.0);
                     ui.label(RichText::new("JARVIS").font(ui_kit::display(22.0)).color(theme::BRIGHT).extra_letter_spacing(4.0));
-                    ui.label(RichText::new(d.map(|d| d.me.name.as_str()).unwrap_or("A ligar…")).monospace().size(11.0).color(theme::MUTED));
+                    ui.label(RichText::new(me.as_deref().or(d.map(|d| d.me.name.as_str())).unwrap_or("A ligar…")).monospace().size(11.0).color(theme::MUTED));
                 });
             });
             ui.add_space(14.0);
 
-            Frame::new()
-                .fill(theme::alpha(acc.main, 0.1))
-                .stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.14)))
-                .corner_radius(CornerRadius::same(4))
-                .inner_margin(Margin::same(12))
-                .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    match d {
-                        Some(d) => sprint_box(ui, d, acc),
-                        None => {
-                            ui.label(RichText::new("SPRINT").font(ui_kit::display(13.0)).color(acc.light).extra_letter_spacing(2.0));
-                            ui.label(RichText::new(if b.loading { "A ler o Azure DevOps…" } else { "Sem dados" }).small().color(theme::MUTED));
+            if dev {
+                Frame::new()
+                    .fill(theme::alpha(acc.main, 0.1))
+                    .stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.14)))
+                    .corner_radius(CornerRadius::same(4))
+                    .inner_margin(Margin::same(12))
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        match d {
+                            Some(d) => sprint_box(ui, d, acc),
+                            None => {
+                                ui.label(RichText::new("SPRINT").font(ui_kit::display(13.0)).color(acc.light).extra_letter_spacing(2.0));
+                                ui.label(RichText::new(if b.loading { "A ler o Azure DevOps…" } else { "Sem dados" }).small().color(theme::MUTED));
+                            }
                         }
-                    }
-                });
-            ui.add_space(10.0);
+                    });
+                ui.add_space(10.0);
+            }
             if voice_button(ui, voice_on, acc).clicked() {
                 talk = true;
             }
@@ -455,7 +481,7 @@ impl JarvisApp {
             // The active highlight is one shape that slides between entries; its slot is reserved under them.
             let highlight = ui.painter().add(egui::Shape::Noop);
             let mut active_rect = None;
-            for (view, label) in NAV {
+            for (view, label) in NAV.into_iter().filter(|(v, _)| shown(*v)) {
                 let count = d.and_then(|d| match view {
                     View::Now => Some(d.now.len()),
                     View::Review => Some(d.review.len()),
@@ -496,13 +522,19 @@ impl JarvisApp {
 
             ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.horizontal(|ui| {
-                    if ui_kit::button(ui, "Atualizar", false, acc).clicked() {
+                    if dev && ui_kit::button(ui, "Atualizar", false, acc).clicked() {
                         board.refresh();
                     }
                     if ui_kit::button(ui, "Definições", false, acc).clicked() {
                         self.view = View::Settings;
                     }
                 });
+                if !dev {
+                    if let Some(note) = &self.hotkey_note {
+                        ui.label(RichText::new(note).small().color(theme::AMBER));
+                    }
+                    return;
+                }
                 let status = if b.loading {
                     "A atualizar…".to_owned()
                 } else {
@@ -534,6 +566,7 @@ impl JarvisApp {
             View::Prs => ("PRs", "Os teus pull requests, os votos e os comentários do review. Corrigir abre uma conversa com o comentário."),
             View::Review => ("Revisão e QA", "Os teus itens em Code Review, To Test e Testing (deste sprint ou mexidos nas últimas duas semanas)."),
             View::Refined => ("Refined livre", "Itens refinados sem ninguém atribuído, pela ordem do backlog."),
+            View::Chat if !crate::profile::dev() => ("Chat", "Escreve ou fala com o Jarvis: escreve, resume, analisa e propõe. Nada é enviado nem apagado sem o teu sim."),
             View::Chat => ("Chat", "A análise é feita aqui, por escrito ou por voz. A implementação segue para o Claude Code ou o Antigravity."),
             View::Hours => ("Horas do sprint", "As tuas tarefas deste sprint: estimativa, Work Done e o que falta preencher."),
             View::Cleanup => ("Limpeza", "Worktrees dos itens e anexos descarregados. Só limpa o que já não tem trabalho por enviar."),
@@ -572,6 +605,14 @@ impl JarvisApp {
                     }
                     return;
                 }
+                // Without the dev mode, Hoje does not wait for the board.
+                View::Today if !crate::profile::dev() => {
+                    let extras = self.dashboard_extras();
+                    let since = (motion::now(ui.ctx()) - self.view_at) as f32;
+                    dashboard::view(ui, None, &extras, acc, &mut go, since);
+                    ui.add_space(24.0);
+                    return;
+                }
                 _ => {}
             }
             board.with(|b| {
@@ -589,7 +630,7 @@ impl JarvisApp {
                     View::Today => {
                         let extras = self.dashboard_extras();
                         let since = (motion::now(ui.ctx()) - self.view_at) as f32;
-                        dashboard::view(ui, d, &extras, acc, &mut go, since);
+                        dashboard::view(ui, Some(d), &extras, acc, &mut go, since);
                     }
                     View::Now => views::now(ui, d, acc),
                     View::Review => views::review(ui, d, acc),
@@ -634,6 +675,7 @@ impl JarvisApp {
         feed.sort_by(|a, b| b.0.cmp(&a.0));
         feed.truncate(8);
         dashboard::Extras {
+            dev: crate::profile::dev(),
             meetings: agenda::today_all(&self.agenda),
             todos: tasks::open_list(),
             prs: prs.active.iter().filter(|p| !p.open_threads.is_empty()).map(|p| (p.title.clone(), p.id, p.open_threads.len(), p.url.clone())).collect(),

@@ -14,7 +14,7 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-#[derive(Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Profile {
     pub name: String,
@@ -27,6 +27,45 @@ pub struct Profile {
     pub active_pack: String,
     /// The board's personal access token, DPAPI-encrypted, base64.
     pub board_token: String,
+    /// What this person uses Jarvis for: "dev" (board, PRs, hours, cleanup) and/or "rh" (the personal HR assistant).
+    /// The menu and the Hoje screen only show what belongs to the modes that are on. Missing in older files: ["dev"].
+    pub modes: Vec<String>,
+}
+
+impl Default for Profile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            spoken_name: String::new(),
+            projects_dir: String::new(),
+            packs: Vec::new(),
+            active_pack: String::new(),
+            board_token: String::new(),
+            modes: vec![DEV.into()],
+        }
+    }
+}
+
+pub const DEV: &str = "dev";
+pub const RH: &str = "rh";
+
+/// The modes that are on; never empty (an empty list reads as dev, as before modes existed).
+pub fn modes() -> Vec<String> {
+    // Dev aid for screenshots: JARVIS_SHOT_MODES=rh (or dev,rh) without touching the saved profile.
+    if let Ok(m) = std::env::var("JARVIS_SHOT_MODES") {
+        return m.split(',').map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
+    }
+    let m = get().modes;
+    if m.is_empty() { vec![DEV.into()] } else { m }
+}
+
+pub fn has_mode(mode: &str) -> bool {
+    modes().iter().any(|m| m == mode)
+}
+
+/// The board, PRs, hours and cleanup.
+pub fn dev() -> bool {
+    has_mode(DEV)
 }
 
 #[derive(Clone, Deserialize, Default)]
