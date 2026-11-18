@@ -68,6 +68,12 @@ pub fn dev() -> bool {
     has_mode(DEV)
 }
 
+/// The mode a conversation answers in when it does not say: an item or PR conversation is dev; a general one is rh
+/// when the HR mode is on.
+pub fn default_mode(work_item: bool) -> &'static str {
+    if work_item || !has_mode(RH) { DEV } else { RH }
+}
+
 #[derive(Clone, Deserialize, Default)]
 #[serde(default)]
 pub struct Manifest {
@@ -154,6 +160,8 @@ impl Default for Branches {
 pub struct Guides {
     /// Team rules added to Jarvis's own persona.
     pub persona: String,
+    /// Team rules for the HR conversations. Without it, an HR-only person (no dev mode) gets `persona`.
+    pub persona_rh: String,
     /// Extra notes for Antigravity.
     pub agy: String,
     /// How to prepare an implementation (tasks, worktrees, hand-off package).
@@ -283,6 +291,7 @@ pub fn plugin_dir() -> Option<PathBuf> {
 
 pub enum Guide {
     Persona,
+    PersonaRh,
     Agy,
     Prepare,
     Test,
@@ -293,6 +302,9 @@ pub fn guide(g: Guide) -> Option<PathBuf> {
     let from_pack = pack().and_then(|p| {
         let rel = match g {
             Guide::Persona => p.m.guides.persona,
+            // A dev pack's rules (branches, repositories) do not belong in an HR conversation.
+            Guide::PersonaRh if p.m.guides.persona_rh.is_empty() && !dev() => p.m.guides.persona,
+            Guide::PersonaRh => p.m.guides.persona_rh,
             Guide::Agy => p.m.guides.agy,
             Guide::Prepare => p.m.guides.prepare,
             Guide::Test => p.m.guides.test,

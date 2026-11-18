@@ -63,7 +63,7 @@ fn main() -> eframe::Result {
         for r in profile::repos() {
             println!("repo {} {} -> worktree {}", r.side, profile::repo_dir(&r).display(), profile::worktree_dir(&r, 8780).display());
         }
-        for g in [profile::Guide::Persona, profile::Guide::Agy, profile::Guide::Prepare, profile::Guide::Test] {
+        for g in [profile::Guide::Persona, profile::Guide::PersonaRh, profile::Guide::Agy, profile::Guide::Prepare, profile::Guide::Test] {
             println!("guia {:?}", profile::guide(g));
         }
         let prep = brain::Prep { id: 8780, branch: profile::branch_for("Bug", "Sprint 1", 8780).unwrap_or_default() };
@@ -108,7 +108,7 @@ fn main() -> eframe::Result {
             brain::Ev::ToolResult { error, .. } => println!("   -> {}", if error { "BLOQUEADO/ERRO" } else { "correu" }),
             _ => {}
         };
-        let r = brain::ask_gemini(&text, "", "", None, Some("gemini-3.8-flash-low"), Some(&prep), &stop, &mut on);
+        let r = brain::ask_gemini(&text, "", &brain::Turn { mode: profile::DEV, item: "" }, None, Some("gemini-3.8-flash-low"), Some(&prep), &stop, &mut on);
         println!("{:?}", r.map(|o| o.tokens));
         return Ok(());
     }
@@ -180,7 +180,10 @@ fn main() -> eframe::Result {
             _ => {}
         };
         let t = std::time::Instant::now();
-        let r = if gemini { brain::ask_gemini(&text, "", "", None, args.get(4).map(String::as_str), None, &stop, &mut on) } else { brain::ask_claude(&text, "", "sonnet", None, &stop, &mut on) };
+        // The mode of a new general conversation: rh when the HR mode is on (JARVIS_SHOT_MODES=rh to try it).
+        let about = brain::Turn { mode: profile::default_mode(false), item: "" };
+        println!("[modo {}]", about.mode);
+        let r = if gemini { brain::ask_gemini(&text, "", &about, None, args.get(4).map(String::as_str), None, &stop, &mut on) } else { brain::ask_claude(&text, &about, "sonnet", None, &stop, &mut on) };
         println!("\n{:?} em {:.1}s", r, t.elapsed().as_secs_f32());
         return Ok(());
     }

@@ -25,6 +25,8 @@ pub enum Action {
     SetEngine(String, Option<String>, Option<String>),
     /// Summarise and continue in a new session.
     Compact(String),
+    /// conversation, mode (dev | rh)
+    SetMode(String, String),
 }
 
 #[derive(Default)]
@@ -124,7 +126,12 @@ pub fn conversation(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_wind
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width().min(980.0));
                 if c.messages.is_empty() {
-                    ui.label(RichText::new("Escreve abaixo. A análise é feita aqui; a implementação abre no Claude Code ou no Antigravity.").color(theme::MUTED));
+                    let empty = if c.mode() == crate::profile::RH {
+                        "Escreve ou fala com o Jarvis: um email, o resumo de uma reunião, uma vaga, uma análise. Ele escreve e propõe; nada é enviado nem apagado sem o teu sim."
+                    } else {
+                        "Escreve abaixo. A análise é feita aqui; a implementação abre no Claude Code ou no Antigravity."
+                    };
+                    ui.label(RichText::new(empty).color(theme::MUTED));
                 }
                 for m in &c.messages {
                     // A message that just arrived fades in and settles from a little lower.
@@ -367,6 +374,20 @@ fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
             });
             if m != model {
                 acts.push(Action::SetEngine(c.id.clone(), Some(engine.clone()), Some(m)));
+            }
+            // With both modes on, a general conversation can be dev or RH (the rules the engine gets).
+            if c.item_id.is_none() && c.pr_key.is_none() && crate::profile::dev() && crate::profile::has_mode(crate::profile::RH) {
+                ui.add_space(12.0);
+                ui.label(RichText::new("MODO").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
+                let mode = c.mode();
+                let mut pick = mode.clone();
+                egui::ComboBox::from_id_salt(("mode", &c.id)).selected_text(if mode == crate::profile::RH { "RH" } else { "Dev" }).width(80.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut pick, crate::profile::DEV.to_owned(), "Dev");
+                    ui.selectable_value(&mut pick, crate::profile::RH.to_owned(), "RH");
+                });
+                if pick != mode {
+                    acts.push(Action::SetMode(c.id.clone(), pick));
+                }
             }
         });
     });

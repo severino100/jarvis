@@ -80,11 +80,18 @@ pub struct Chat {
     pub compacting: bool,
     /// Summary of the previous session, sent once with the next message of the new one.
     pub carry: Option<String>,
+    /// dev | rh, chosen in this conversation (None: an item or PR conversation is dev; a general one is rh when the HR
+    /// mode is on).
+    pub mode: Option<String>,
     #[serde(skip)]
     pub busy: bool,
 }
 
 impl Chat {
+    /// The mode this conversation answers in (which persona the engine gets).
+    pub fn mode(&self) -> String {
+        self.mode.clone().unwrap_or_else(|| crate::profile::default_mode(self.item_id.is_some() || self.pr_key.is_some()).to_owned())
+    }
     pub fn cost_today(&self) -> (f64, u64) {
         let today = now()[..10].to_owned();
         self.messages.iter().filter(|m| m.role == "note" && m.at.starts_with(&today)).fold((0.0, 0), |(c, t), m| (c + m.cost.unwrap_or(0.0), t + m.tokens.unwrap_or(0)))
@@ -374,10 +381,25 @@ impl Chats {
         });
     }
 
+    /// The mode (dev | rh) chosen in this conversation; it applies from the next message. A new session starts, since
+    /// the rules are given when a session begins.
+    pub fn set_mode(&self, id: &str, mode: String) {
+        self.edit(id, true, |c| {
+            if c.mode() != mode {
+                c.session_id = None;
+                c.agy_conversation = None;
+                c.context_tokens = None;
+                c.messages.push(msg("divider", if mode == crate::profile::RH { "Modo RH a partir daqui" } else { "Modo dev a partir daqui" }));
+            }
+            c.mode = Some(mode);
+        });
+    }
+
     pub fn send(&self, id: &str, text: &str, voice: bool, engine: Engine) -> bool {
         let text = text.trim().to_owned();
         let history;
         let item_id;
+        let mode;
         let turn_start;
         let mut engine = engine;
         let mut prompt_text = text.clone();
@@ -404,6 +426,7 @@ Mensagem de {}:
             c.busy = true;
             c.updated_at = now();
             item_id = c.item_id;
+            mode = c.mode();
             turn_start = c.messages.len();
             let id = id.to_owned();
             Self::to_front(&mut inner, &id);
@@ -414,11 +437,13 @@ Mensagem de {}:
 
         let this = self.clone();
         let id = id.to_owned();
-        thread::spawn(move || this.turn(&id, &prompt_text, voice, &history, item_id, turn_start, engine));
+        thread::spawn(move || this.turn(&id, &prompt_text, voice, &history, (item_id, &mode), turn_start, engine));
         true
     }
 
-    fn turn(&self, id: &str, text: &str, voice: bool, history: &(String, String), item_id: Option<i64>, turn_start: usize, engine: Engine) {
+    /// `about`: the item (in an item conversation) and the conversation's mode.
+    fn turn(&self, id: &str, text: &str, voice: bool, history: &(String, String), about: (Option<i64>, &str), turn_start: usize, engine: Engine) {
+        let (item_id, mode) = about;
         let started = Instant::now();
         let stop = self.inner.lock().unwrap().running.get(id).cloned().unwrap_or_default();
         let prompt = if voice { format!("{} {text}", brain::VOICE_TAG) } else { text.to_owned() };
@@ -448,10 +473,11 @@ Mensagem de {}:
             };
             let engine_name = if gemini { "antigravity" } else { "claude" };
             let mut on = |ev: Ev| self.apply(id, ev, gemini, engine_name);
+            let about = brain::Turn { mode, item: &item };
             if gemini {
-                brain::ask_gemini(&prompt, &history.1, &item, conversation.as_deref(), agy_model, prep.as_ref(), &stop, &mut on)
+                brain::ask_gemini(&prompt, &history.1, &about, conversation.as_deref(), agy_model, prep.as_ref(), &stop, &mut on)
             } else {
-                brain::ask_claude(&claude_prompt, &item, &claude_model, session.as_deref(), &stop, &mut on)
+                brain::ask_claude(&claude_prompt, &about, &claude_model, session.as_deref(), &stop, &mut on)
             }
         };
 

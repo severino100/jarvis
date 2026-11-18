@@ -1012,6 +1012,7 @@ impl JarvisApp {
                 Action::PopOut(id) => self.open_window(&id),
                 Action::Implement(id, target) => self.implement(ctx, &id, target),
                 Action::SetEngine(id, engine, model) => self.chats.set_engine(&id, engine, model),
+                Action::SetMode(id, mode) => self.chats.set_mode(&id, mode),
                 Action::Compact(id) => {
                     self.chats.compact(&id, chat::engine());
                 }

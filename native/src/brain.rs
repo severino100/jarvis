@@ -30,20 +30,56 @@ fn with_team(own: &str, team: crate::profile::Guide) -> String {
     if team.is_empty() { own } else { format!("{own}\n\nRegras da equipa:\n{team}") }
 }
 
-fn persona() -> String {
-    with_team(PERSONA, crate::profile::Guide::Persona)
+const PERSONA_RH: &str = include_str!("../../docs/persona-rh.md");
+const GEMINI_NOTES_RH: &str = include_str!("../../docs/persona-rh-gemini.md");
+
+fn is_rh(mode: &str) -> bool {
+    mode == crate::profile::RH
 }
 
-fn agy_notes() -> String {
-    with_team(GEMINI_NOTES, crate::profile::Guide::Agy)
+/// Jarvis's rules for the conversation's mode (dev: analysis and preparation; rh: the personal HR assistant), with the
+/// team's rules on top.
+fn persona(mode: &str) -> String {
+    if is_rh(mode) { with_team(PERSONA_RH, crate::profile::Guide::PersonaRh) } else { with_team(PERSONA, crate::profile::Guide::Persona) }
+}
+
+fn agy_notes(mode: &str) -> String {
+    if is_rh(mode) { crate::profile::render(GEMINI_NOTES_RH.trim()) } else { with_team(GEMINI_NOTES, crate::profile::Guide::Agy) }
+}
+
+/// What a turn is about: the conversation's mode (dev | rh) and, in an item conversation, the item as read now.
+#[derive(Default)]
+pub struct Turn<'a> {
+    pub mode: &'a str,
+    pub item: &'a str,
+}
+
+/// Where the engine starts: the pack's main repository for dev; for rh, which has no code to read, the personal
+/// folder (%APPDATA%\Jarvis\eu).
+pub fn work_dir(mode: &str) -> PathBuf {
+    if is_rh(mode) {
+        let d = crate::settings::data_dir().join("eu");
+        let _ = fs::create_dir_all(&d);
+        d
+    } else {
+        crate::profile::main_dir()
+    }
 }
 
 fn projects_arg() -> String {
     crate::profile::projects_dir().to_string_lossy().into_owned()
 }
+
+/// The folder the engine may read besides where it starts: the projects for dev; the person's own folder for rh (the
+/// documents, downloads and desktop where a CV or a spreadsheet is).
+fn extra_dir(mode: &str) -> String {
+    if is_rh(mode) { home().to_string_lossy().into_owned() } else { projects_arg() }
+}
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// Built-in tools the Jarvis analysis needs; the rest (web, notebooks, agents, MCP search) only add context.
 const LEAN_TOOLS: &str = "Read,Grep,Glob,Edit,Write,Bash,Skill,TodoWrite";
+/// The HR assistant writes and reads documents; no shell (nothing leaves the PC through a command).
+const LEAN_TOOLS_RH: &str = "Read,Grep,Glob,Edit,Write,Skill,TodoWrite";
 
 const ALLOWED: &[&str] = &[
     "Read", "Grep", "Glob", "Edit", "Write", "Skill", "TodoWrite",
@@ -164,7 +200,7 @@ pub fn agy_models() -> Vec<(String, String)> {
 
 // If Jarvis was started from inside a Claude Code session, its CLAUDE_*/ANTHROPIC_* variables point the CLI at that
 // host's auth instead of the user's own login.
-fn command(exe: &Path) -> Command {
+fn command(exe: &Path, mode: &str) -> Command {
     let mut c = Command::new(exe);
     for (k, _) in std::env::vars() {
         let up = k.to_uppercase();
@@ -173,7 +209,7 @@ fn command(exe: &Path) -> Command {
         }
     }
     crate::profile::child_env(&mut c);
-    c.current_dir(crate::profile::main_dir()).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW);
+    c.current_dir(work_dir(mode)).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW);
     c
 }
 
@@ -213,16 +249,18 @@ fn with_item(text: &str, item_context: &str) -> String {
 }
 
 /// One Claude Code turn; `session` resumes the conversation's session.
-pub fn ask_claude(text: &str, item_context: &str, model: &str, session: Option<&str>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
-    let mut cmd = command(&claude_exe());
-    cmd.args(["-p", &with_item(text, item_context), "--model", model, "--max-turns", "30"])
+pub fn ask_claude(text: &str, turn: &Turn, model: &str, session: Option<&str>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
+    let mut cmd = command(&claude_exe(), turn.mode);
+    cmd.args(["-p", &with_item(text, turn.item), "--model", model, "--max-turns", "30"])
         .args(["--output-format", "stream-json", "--verbose", "--include-partial-messages"])
-        .args(["--append-system-prompt", &persona(), "--permission-mode", "acceptEdits"])
-        .args(["--allowedTools", &ALLOWED.join(" "), "--disallowedTools", &DENIED.join(" "), "--add-dir", &projects_arg()]);
+        .args(["--append-system-prompt", &persona(turn.mode), "--permission-mode", "acceptEdits"])
+        .args(["--allowedTools", &ALLOWED.join(" "), "--disallowedTools", &DENIED.join(" ")]);
+    // The HR assistant reads the documents the person points at (CVs, spreadsheets), not the code folders.
+    cmd.args(["--add-dir", &extra_dir(turn.mode)]);
     // Lean context (measured: 34.5k → 18.2k tokens on every API call of a turn): no MCP servers, only the tools the
     // analysis uses, and no user-level settings (plugins, hooks); the team's skills come from the pack, which is a
     // Claude Code plugin.
-    cmd.args(["--strict-mcp-config", "--tools", LEAN_TOOLS, "--settings", r#"{"effortLevel":"medium"}"#]);
+    cmd.args(["--strict-mcp-config", "--tools", if is_rh(turn.mode) { LEAN_TOOLS_RH } else { LEAN_TOOLS }, "--settings", r#"{"effortLevel":"medium"}"#]);
     if let Some(plugin) = crate::profile::plugin_dir() {
         cmd.args(["--setting-sources", "project,local", "--plugin-dir"]).arg(plugin);
     }
@@ -317,12 +355,15 @@ fn tokens(u: &Value) -> u64 {
 
 /// One Gemini turn through agy. The first turn of a conversation gets the conversation so far as text; later turns
 /// resume the agy conversation by id.
-pub fn ask_gemini(text: &str, history: &str, item_context: &str, conversation: Option<&str>, model: Option<&str>, prep: Option<&Prep>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
+pub fn ask_gemini(text: &str, history: &str, turn: &Turn, conversation: Option<&str>, model: Option<&str>, prep: Option<&Prep>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
     let exe = agy_exe().ok_or("O Antigravity CLI (agy) não está instalado.")?;
+    let (rh, item_context) = (is_rh(turn.mode), turn.item);
     let mut parts: Vec<String> = Vec::new();
     if conversation.is_none() {
-        parts.push(format!("{}\n\n{}", persona(), agy_notes()));
-        parts.push(preloaded_context());
+        parts.push(format!("{}\n\n{}", persona(turn.mode), agy_notes(turn.mode)));
+        if !rh {
+            parts.push(preloaded_context());
+        }
     }
     if !history.is_empty() {
         // The rules always go in whole; an old conversation is cut from the start.
@@ -332,7 +373,7 @@ pub fn ask_gemini(text: &str, history: &str, item_context: &str, conversation: O
         parts.push(format!("Dados atuais do item no Azure DevOps:\n{item_context}"));
     }
     // "/<skill> …" is a Claude Code skill command; agy gets the same request in words, pointing at the skill.
-    let skill = crate::profile::skill_dir();
+    let skill = crate::profile::skill_dir().filter(|_| !rh);
     let text = match (crate::profile::skill_command(), &skill) {
         (Some(cmd), Some(dir)) if text.starts_with(&cmd) => format!("Segue o fluxo da skill {} ({}\\SKILL.md):{}", &cmd[1..], dir.display(), &text[cmd.len()..]),
         _ => text.to_owned(),
@@ -342,12 +383,12 @@ pub fn ask_gemini(text: &str, history: &str, item_context: &str, conversation: O
     }
     parts.push(format!("Mensagem atual de {}:\n{text}", crate::profile::name()));
     let prompt = parts.join("\n\n");
-    let mut cmd = command(&exe);
+    let mut cmd = command(&exe, turn.mode);
     // Headless agy only accepts exact command allow-rules: only this item's preparation commands are allowed.
     // A read outside the workspace asks for permission, which print mode cannot answer: agy then ends the turn after
     // one sentence. So the skill folder is part of the workspace too. The time limit stops a run that never ends.
     cmd.args(["-p", &prompt, "--output-format", "stream-json", "--mode", "accept-edits", "--disable-slash-commands", "--print-timeout", "900s"])
-        .args(["--add-dir", &projects_arg(), "--settings", &agy_settings(prep)]);
+        .args(["--add-dir", &extra_dir(turn.mode), "--settings", &agy_settings(prep)]);
     if let Some(d) = &skill {
         cmd.arg("--add-dir").arg(d);
     }
