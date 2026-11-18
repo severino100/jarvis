@@ -1,5 +1,5 @@
-# A tag v* (ex.: v0.2.0) compila o Jarvis no Windows e publica um release com o jarvis.exe e o install.ps1,
-# que é o que o instalador dos colegas descarrega.
+# A tag v* (ex.: v0.2.0) compila o Jarvis no Windows e publica um release com o Jarvis-Setup.exe (o instalador que
+# se passa às pessoas), o jarvis.exe e o install.ps1 (que descarrega o jarvis.exe do release).
 name: release
 
 on:
@@ -30,6 +30,12 @@ jobs:
         working-directory: native
         run: cargo build --release --locked
 
+      - name: Instalador (Jarvis-Setup.exe)
+        run: |
+          choco upgrade innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\jarvis.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
       - name: Publicar o release
         uses: softprops/action-gh-release@v2
         with:
@@ -37,5 +43,6 @@ jobs:
           name: Jarvis ${{ github.event.inputs.tag || github.ref_name }}
           generate_release_notes: true
           files: |
+            installer/Output/Jarvis-Setup.exe
             native/target/release/jarvis.exe
             scripts/install.ps1

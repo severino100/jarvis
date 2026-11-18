@@ -1,14 +1,15 @@
 # Instala o Jarvis para este utilizador do Windows, sem compilar nada:
 #   irm https://github.com/severino100/jarvis/releases/latest/download/install.ps1 | iex
 # ou, com o ficheiro descarregado:
-#   powershell -ExecutionPolicy Bypass -File install.ps1 [-SemVoz] [-Versao v0.2.0] [-Exe <jarvis.exe local>]
+#   powershell -ExecutionPolicy Bypass -File install.ps1 [-SemVoz] [-Versao v0.2.0] [-Exe <jarvis.exe local>] [-Verificar]
 #
+# -Verificar só diz o que falta neste PC (git, motores de IA) e como o instalar, sem instalar nada.
 # - descarrega o jarvis.exe do release (o mais recente, ou -Versao) para %LOCALAPPDATA%\Programs\Jarvis;
 # - descarrega a voz (Whisper para ouvir, Piper com a voz pt-PT para falar, ~600 MB) das fontes oficiais para
 #   %LOCALAPPDATA%\Jarvis\vendor, a não ser com -SemVoz (o Jarvis funciona sem voz);
 # - cria os atalhos "Jarvis" no menu Iniciar e no Ambiente de Trabalho, liga o arranque com o Windows e abre-o.
 # Não pede contas nem chaves: cada motor de IA (Claude Code, Antigravity, Codex) usa a sessão que já tens nele.
-param([switch]$SemVoz, [string]$Versao = '', [string]$Exe = '')
+param([switch]$SemVoz, [string]$Versao = '', [string]$Exe = '', [switch]$Verificar)
 # PowerShell names are case-insensitive: $Exe is read here, before $exe below reuses the name for the destination.
 $localExe = $Exe
 $ErrorActionPreference = 'Stop'
@@ -35,6 +36,59 @@ function Get-File($url, $dest) {
 }
 
 function Step($text) { Write-Host "-> $text" -ForegroundColor Cyan }
+
+# O que o Jarvis usa e não instala: o git (pacotes de equipa e worktrees) e pelo menos um motor de IA, cada um com a
+# conta de quem o usa. Procura nos mesmos sítios que o Jarvis (native/src/brain.rs).
+function Find-First($paths, $command) {
+  foreach ($p in $paths) { if ($p -and (Test-Path $p)) { return $p } }
+  $c = Get-Command $command -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($c) { return $c.Source }
+  return $null
+}
+
+function Show-Requisitos {
+  $home_ = $env:USERPROFILE
+  $git = Find-First @("$env:ProgramFiles\Git\cmd\git.exe", "$env:LOCALAPPDATA\Programs\Git\cmd\git.exe") 'git'
+  $claude = Find-First @("$home_\.local\bin\claude.exe") 'claude'
+  $agy = Find-First @("$home_\.agy\bin\agy.exe", "$env:LOCALAPPDATA\agy\bin\agy.exe") 'agy'
+  $codexApp = $null
+  try { $codexApp = (Get-AppxPackage OpenAI.Codex -ErrorAction SilentlyContinue).InstallLocation } catch { }
+  $codex = Find-First @($codexApp, "$env:APPDATA\npm\node_modules\@openai\codex\package.json") 'codex'
+
+  $items = @(
+    @{ Nome = 'Git'; Ok = $git; Para = 'pacotes de equipa, repositórios e worktrees'
+       Como = @('winget install Git.Git', 'ou descarrega em https://git-scm.com/downloads/win') },
+    @{ Nome = 'Claude Code'; Ok = $claude; Para = 'motor de IA (subscrição Claude Pro ou Max)'
+       Como = @('irm https://claude.ai/install.ps1 | iex', 'depois, num terminal novo: claude  (faz o login com a conta, não com chave de API)', 'ajuda: https://code.claude.com/docs/en/setup') },
+    @{ Nome = 'Antigravity'; Ok = $agy; Para = 'motor de IA (conta Google)'
+       Como = @('irm https://antigravity.google/cli/install.ps1 | iex', 'depois, num terminal novo: agy  (faz o login com a conta Google)', 'ajuda: https://antigravity.google') },
+    @{ Nome = 'Codex'; Ok = $codex; Para = 'motor de IA (conta ChatGPT)'
+       Como = @('instala a app Codex: https://developers.openai.com/codex', 'ou, com o Node.js (https://nodejs.org/en/download): npm i -g @openai/codex', 'depois: codex login  (escolhe "Sign in with ChatGPT", não chave de API)') }
+  )
+
+  Write-Host ''
+  Write-Host 'O que o Jarvis precisa neste PC:' -ForegroundColor Cyan
+  foreach ($i in $items) {
+    if ($i.Ok) {
+      Write-Host ("  OK     {0}" -f $i.Nome) -ForegroundColor Green
+    } else {
+      Write-Host ("  FALTA  {0}: {1}" -f $i.Nome, $i.Para) -ForegroundColor Yellow
+      foreach ($l in $i.Como) { Write-Host "         $l" }
+    }
+  }
+  $motores = @($claude, $agy, $codex) | Where-Object { $_ }
+  Write-Host ''
+  if (-not $git) {
+    Write-Host 'Sem o git, o Jarvis não consegue trazer o pacote da tua equipa nem preparar worktrees.' -ForegroundColor Yellow
+  }
+  if ($motores.Count -eq 0) {
+    Write-Host 'Precisas de pelo menos um motor de IA (Claude Code, Antigravity ou Codex) para as conversas. Instala um dos de cima e abre o Jarvis outra vez.' -ForegroundColor Yellow
+  } elseif ($git) {
+    Write-Host 'Está tudo o que é preciso. Os motores que faltam são opcionais: a conversa passa para eles quando o plano de outro acaba.' -ForegroundColor Green
+  }
+}
+
+if ($Verificar) { Show-Requisitos; return }
 
 # 1. O programa
 Step $(if ($localExe) { 'A copiar o Jarvis…' } else { 'A descarregar o Jarvis…' })
@@ -118,4 +172,5 @@ Step 'A abrir o Jarvis…'
 Start-Process -FilePath $exe -WorkingDirectory $appDir
 Write-Host ''
 Write-Host 'Jarvis instalado. Em Definições → Perfil e equipa: o teu nome, a pasta dos projetos e, se tiveres, o pacote da tua equipa.' -ForegroundColor Green
-Write-Host 'Os motores de IA usam as tuas próprias sessões: Claude Code (claude, depois /login), Antigravity (agy) ou Codex (app Codex).'
+Write-Host 'Os motores de IA usam as tuas próprias sessões e subscrições: nenhum recebe chaves de API.'
+Show-Requisitos

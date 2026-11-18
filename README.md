@@ -32,13 +32,15 @@ Compras feitas fora do Jarvis (créditos extra no ChatGPT ou na conta Google) de
 
 ## Instalar
 
-Numa janela do PowerShell:
+Descarrega o **[Jarvis-Setup.exe](https://github.com/severino100/jarvis/releases/latest/download/Jarvis-Setup.exe)** e abre-o. Não precisa de administrador. Se o Windows avisar ("O Windows protegeu o computador"), carrega em **Mais informações → Executar mesmo assim**: o instalador ainda não tem assinatura digital.
+
+O instalador põe o Jarvis em `%LOCALAPPDATA%\Programs\Jarvis`, descarrega a voz (Whisper e Piper com a voz pt-PT, cerca de 555 MB, das fontes oficiais, com verificação do conteúdo) para `%LOCALAPPDATA%\Jarvis\vendor` se a escolheres, cria os atalhos e liga o arranque com o Windows. No fim mostra o que falta no PC (git, Claude Code, Antigravity, Codex), com o comando e o link para instalar cada um. Para atualizar, abre o instalador novo (a voz já descarregada não volta a descer). Desinstala-se em Definições do Windows → Aplicações.
+
+Alternativa sem o instalador, numa janela do PowerShell (`-SemVoz` salta a voz; `-Verificar` só diz o que falta):
 
 ```powershell
 irm https://github.com/severino100/jarvis/releases/latest/download/install.ps1 | iex
 ```
-
-O instalador descarrega o `jarvis.exe` do último release para `%LOCALAPPDATA%\Programs\Jarvis`, a voz (Whisper e Piper com a voz pt-PT, ~600 MB, das fontes oficiais) para `%LOCALAPPDATA%\Jarvis\vendor`, cria os atalhos e liga o arranque com o Windows. Sem voz: descarrega o `install.ps1` e corre-o com `-SemVoz`. Para atualizar, corre-o outra vez (a voz já descarregada não volta a descer).
 
 Depois, no Jarvis, **Definições → Perfil e equipa**:
 

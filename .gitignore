@@ -6,3 +6,4 @@ claude-plugin/skills/
 .tmp-*
 *.guardado
 *.log
+installer/Output/
