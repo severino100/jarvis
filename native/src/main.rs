@@ -26,6 +26,7 @@ mod ui_kit;
 mod views;
 mod settings;
 mod profile;
+mod eu;
 mod theme;
 
 use app::{AppEvent, JarvisApp};
@@ -71,6 +72,7 @@ fn main() -> eframe::Result {
             println!("  $ {c}");
         }
         println!("--- persona ---\n{}", profile::render(include_str!("../../docs/persona.md")));
+        println!("--- o que a pessoa ensinou ({}) ---\n{}", eu::ensure().display(), eu::prompt_block());
         return Ok(());
     }
     // Dev aid: `jarvis --dump` loads the board once and prints a summary.

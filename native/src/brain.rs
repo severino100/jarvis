@@ -47,6 +47,12 @@ fn agy_notes(mode: &str) -> String {
     if is_rh(mode) { crate::profile::render(GEMINI_NOTES_RH.trim()) } else { with_team(GEMINI_NOTES, crate::profile::Guide::Agy) }
 }
 
+/// The rules plus what the person taught Jarvis (instructions and memory), below them.
+fn with_personal(rules: String) -> String {
+    let personal = crate::eu::prompt_block();
+    if personal.is_empty() { rules } else { format!("{rules}\n\n{personal}") }
+}
+
 /// What a turn is about: the conversation's mode (dev | rh) and, in an item conversation, the item as read now.
 #[derive(Default)]
 pub struct Turn<'a> {
@@ -58,9 +64,7 @@ pub struct Turn<'a> {
 /// folder (%APPDATA%\Jarvis\eu).
 pub fn work_dir(mode: &str) -> PathBuf {
     if is_rh(mode) {
-        let d = crate::settings::data_dir().join("eu");
-        let _ = fs::create_dir_all(&d);
-        d
+        crate::eu::ensure()
     } else {
         crate::profile::main_dir()
     }
@@ -253,7 +257,7 @@ pub fn ask_claude(text: &str, turn: &Turn, model: &str, session: Option<&str>, s
     let mut cmd = command(&claude_exe(), turn.mode);
     cmd.args(["-p", &with_item(text, turn.item), "--model", model, "--max-turns", "30"])
         .args(["--output-format", "stream-json", "--verbose", "--include-partial-messages"])
-        .args(["--append-system-prompt", &persona(turn.mode), "--permission-mode", "acceptEdits"])
+        .args(["--append-system-prompt", &with_personal(persona(turn.mode)), "--permission-mode", "acceptEdits"])
         .args(["--allowedTools", &ALLOWED.join(" "), "--disallowedTools", &DENIED.join(" ")]);
     // The HR assistant reads the documents the person points at (CVs, spreadsheets), not the code folders.
     cmd.args(["--add-dir", &extra_dir(turn.mode)]);
@@ -264,6 +268,8 @@ pub fn ask_claude(text: &str, turn: &Turn, model: &str, session: Option<&str>, s
     if let Some(plugin) = crate::profile::plugin_dir() {
         cmd.args(["--setting-sources", "project,local", "--plugin-dir"]).arg(plugin);
     }
+    // The personal skills (%APPDATA%\Jarvis\eu\skills), a plugin of their own.
+    cmd.arg("--plugin-dir").arg(crate::eu::plugin_dir());
     if let Some(s) = session {
         cmd.args(["--resume", s]);
     }
@@ -364,6 +370,11 @@ pub fn ask_gemini(text: &str, history: &str, turn: &Turn, conversation: Option<&
         if !rh {
             parts.push(preloaded_context());
         }
+    }
+    // Every turn, not only the first: a rule remembered in this conversation counts from the next message.
+    let personal = crate::eu::prompt_block();
+    if !personal.is_empty() {
+        parts.push(personal);
     }
     if !history.is_empty() {
         // The rules always go in whole; an old conversation is cut from the start.
