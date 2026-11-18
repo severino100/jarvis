@@ -33,7 +33,7 @@ pub struct ToolLine {
 #[serde(default, rename_all = "camelCase")]
 pub struct Msg {
     pub id: String,
-    /// user | assistant | tools | inform | note | error | implement | handoff
+    /// user | assistant | tools | inform | note | error | implement | handoff | divider | remembered | forgotten
     pub role: String,
     pub text: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -176,11 +176,18 @@ fn wants_opus(text: &str) -> bool {
 
 impl Chats {
     pub fn load(ctx: egui::Context) -> Self {
-        let file = crate::settings::data_dir().join("chats-native.json");
+        // Screenshots of an HR conversation (JARVIS_SHOT_VIEW=chat-rh) use a throw-away file, not the real conversations.
+        let file = if std::env::var("JARVIS_SHOT_VIEW").as_deref() == Ok("chat-rh") {
+            let f = std::env::temp_dir().join("jarvis-shot-chats.json");
+            let _ = fs::remove_file(&f);
+            f
+        } else {
+            crate::settings::data_dir().join("chats-native.json")
+        };
         let mut chats = fs::read_to_string(&file).ok().and_then(|s| serde_json::from_str::<File>(&s).ok()).unwrap_or_default().chats;
         // Once: the Electron conversations come over (same format), so the switch keeps the history.
         let imported = crate::settings::with_state(|s| std::mem::replace(&mut s.imported_electron_chats, true));
-        if !imported {
+        if !imported && file.ends_with("chats-native.json") {
             let old = fs::read_to_string(crate::settings::data_dir().join("chats.json")).ok().and_then(|s| serde_json::from_str::<File>(&s).ok()).unwrap_or_default().chats;
             for c in old {
                 if !chats.iter().any(|x| x.id == c.id) {
@@ -365,6 +372,16 @@ impl Chats {
         .flatten()
     }
 
+    /// "Desfazer" on a "Guardei: …" note: the rule leaves memoria.md and the note says so.
+    pub fn undo_remember(&self, id: &str, msg_id: &str) {
+        self.edit(id, true, |c| {
+            if let Some(m) = c.messages.iter_mut().find(|m| m.id == msg_id && m.role == "remembered") {
+                crate::eu::forget(&m.text);
+                m.role = "forgotten".into();
+            }
+        });
+    }
+
     pub fn mark_implemented(&self, id: &str, target: &str, text: &str) {
         self.edit(id, true, |c| {
             c.implemented_in = Some(target.into());
@@ -542,6 +559,7 @@ Mensagem de {}:
         let event = self
             .edit(id, true, |c| {
                 let (mut browser, mut implement) = (false, None);
+                let mut remember = Vec::new();
                 for (k, m) in c.messages.iter_mut().enumerate() {
                     m.live = false;
                     for t in &mut m.tools {
@@ -555,7 +573,15 @@ Mensagem de {}:
                         if implement.is_none() {
                             implement = i;
                         }
+                        remember.extend(brain::read_remember(&m.text));
                         m.text = brain::strip_marks(&m.text);
+                    }
+                }
+                let before = c.messages.len().saturating_sub(1);
+                // "Lembra-te que…": the rule goes to memoria.md and shows as a quiet note that can be undone.
+                if ok {
+                    for (j, r) in remember.iter().filter_map(|r| crate::eu::remember(r)).enumerate() {
+                        c.messages.insert(before + j, msg("remembered", r.text));
                     }
                 }
                 let before = c.messages.len().saturating_sub(1);
@@ -639,6 +665,24 @@ Mensagem de {}:
                 msg("user", "Sim, avança."),
                 Msg { worktree: Some(wt.clone()), ..msg("implement", "Está tudo preparado. Onde queres implementar?") },
                 Msg { cost: Some(0.42), tokens: Some(48200), ..msg("note", "Concluído em 48 s · 48,2 mil tokens · 0,42 USD · claude-sonnet") },
+            ];
+        });
+    }
+
+    /// Dev aid for JARVIS_SHOT_VIEW=chat-rh: an HR conversation where a rule was remembered and another undone.
+    pub fn seed_demo_rh(&self) {
+        let id = self.create(Some("Email à Ana sobre a entrevista".into()), None, None);
+        self.edit(&id, true, |c| {
+            c.mode = Some(crate::profile::RH.into());
+            c.messages = vec![
+                msg("user", "Escreve um email curto à Ana Costa a marcar a segunda entrevista para quinta às 10h. Lembra-te que assino sempre como Rita."),
+                Msg {
+                    model: Some("claude".into()),
+                    ..msg("assistant", "Aqui está o rascunho:\n\n**Assunto:** Segunda entrevista: quinta-feira às 10h\n\nOlá Ana,\n\nObrigada pelo seu tempo na primeira conversa. Gostávamos de a convidar para uma segunda entrevista na quinta-feira, às 10h. Consegue confirmar se a hora lhe convém?\n\nCom os melhores cumprimentos,\nRita\n\nNão enviei nada: revê e envia tu pelo Outlook. Queres uma versão mais formal?")
+                },
+                msg("remembered", "assina sempre os emails e mensagens como Rita"),
+                msg("forgotten", "usa sempre o tratamento por você"),
+                Msg { cost: Some(0.03), tokens: Some(12100), ..msg("note", "Concluído em 6 s · 12,1 mil tokens · 0,03 USD · claude-sonnet") },
             ];
         });
     }

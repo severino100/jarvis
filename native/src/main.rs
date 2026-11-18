@@ -175,8 +175,10 @@ fn main() -> eframe::Result {
         let gemini = args.get(2).map(String::as_str) == Some("gemini");
         let text = args.get(3).cloned().unwrap_or_else(|| "Responde só: ok".into());
         let stop = brain::StopHandle::default();
+        let mut said = String::new();
         let mut on = |ev: brain::Ev| match ev {
             brain::Ev::Delta(t, _) => print!("{t}"),
+            brain::Ev::Block(t) => said.push_str(&format!("{t}\n")),
             brain::Ev::Tool { name, input, .. } => println!("\n[{}] {}", brain::tool_label(&name, &input), brain::tool_detail(&name, &input)),
             brain::Ev::Session(s) => println!("[sessão {s}]"),
             _ => {}
@@ -187,6 +189,10 @@ fn main() -> eframe::Result {
         println!("[modo {}]", about.mode);
         let r = if gemini { brain::ask_gemini(&text, "", &about, None, args.get(4).map(String::as_str), None, &stop, &mut on) } else { brain::ask_claude(&text, &about, "sonnet", None, &stop, &mut on) };
         println!("\n{:?} em {:.1}s", r, t.elapsed().as_secs_f32());
+        // Same as a conversation: [[LEMBRAR: …]] goes to memoria.md.
+        for rule in brain::read_remember(&said).iter().filter_map(|r| eu::remember(r)) {
+            println!("Guardei em {}: {}", eu::memory_file().display(), rule.text);
+        }
         return Ok(());
     }
     // Dev screenshots run next to the installed Jarvis.

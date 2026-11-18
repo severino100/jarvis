@@ -143,7 +143,7 @@ fn view_from(name: &str) -> View {
         "review" => View::Review,
         "refined" => View::Refined,
         "hours" => View::Hours,
-        "chat" => View::Chat,
+        "chat" | "chat-rh" => View::Chat,
         "agenda" => View::Agenda,
         "tasks" => View::Tasks,
         "prs" => View::Prs,
@@ -171,6 +171,9 @@ impl JarvisApp {
         // Dev aid: JARVIS_SHOT_RS=<file.png>[ JARVIS_SHOT_VIEW=now|review|refined|hours] saves one screenshot and quits.
         let shot_view = std::env::var("JARVIS_SHOT_VIEW").unwrap_or_default();
         let chats = Chats::load(cc.egui_ctx.clone());
+        if shot_view == "chat-rh" {
+            chats.seed_demo_rh();
+        }
         if shot_view == "chat" {
             chats.seed_demo();
         }
@@ -1013,6 +1016,7 @@ impl JarvisApp {
                 Action::Implement(id, target) => self.implement(ctx, &id, target),
                 Action::SetEngine(id, engine, model) => self.chats.set_engine(&id, engine, model),
                 Action::SetMode(id, mode) => self.chats.set_mode(&id, mode),
+                Action::Forget(id, msg) => self.chats.undo_remember(&id, &msg),
                 Action::Compact(id) => {
                     self.chats.compact(&id, chat::engine());
                 }

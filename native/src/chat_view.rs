@@ -27,6 +27,8 @@ pub enum Action {
     Compact(String),
     /// conversation, mode (dev | rh)
     SetMode(String, String),
+    /// "Desfazer" on a remembered rule: conversation, message
+    Forget(String, String),
 }
 
 #[derive(Default)]
@@ -248,7 +250,34 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
         }
         "assistant" => {
             who(ui, if crate::chat::is_agy(m) { "JARVIS · ANTIGRAVITY" } else { "JARVIS · CLAUDE CODE" }, acc.main);
-            markdown::show(ui, &m.text, acc);
+            // The marks for Jarvis ([[LEMBRAR: …]] and the others) are not for the person, also while streaming.
+            if m.live {
+                let t = crate::brain::strip_marks(&m.text);
+                // A mark still arriving ("[[LEMB…") is not shown either.
+                let t = match t.rfind("[[") {
+                    Some(i) if !t[i..].contains("]]") => &t[..i],
+                    _ => &t,
+                };
+                markdown::show(ui, t, acc);
+            } else {
+                markdown::show(ui, &m.text, acc);
+            }
+        }
+        "remembered" => {
+            ui.horizontal(|ui| {
+                ui_kit::diamond(ui, true, acc.main, 3.5);
+                ui.add(egui::Label::new(RichText::new(format!("Guardei: {}", m.text)).size(12.5).color(theme::MUTED)).wrap());
+                if ui.add(egui::Label::new(RichText::new("Desfazer").size(12.5).underline().color(acc.light)).sense(Sense::click())).on_hover_text("Tira esta regra da memória (Definições → O meu Jarvis)").clicked() {
+                    acts.push(Action::Forget(c.id.clone(), m.id.clone()));
+                }
+            });
+        }
+        "forgotten" => {
+            ui.horizontal(|ui| {
+                ui_kit::diamond(ui, false, theme::FAINT, 3.5);
+                ui.label(RichText::new("Desfeito:").size(12.5).color(theme::FAINT));
+                ui.add(egui::Label::new(RichText::new(&m.text).size(12.5).strikethrough().color(theme::FAINT)).wrap());
+            });
         }
         "tools" => {
             Frame::new().stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.1))).corner_radius(CornerRadius::same(3)).inner_margin(Margin::symmetric(10, 6)).show(ui, |ui| {
@@ -353,6 +382,20 @@ fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
     let model_label = models.iter().find(|(id, _)| *id == model).map(|(_, l)| l.clone()).unwrap_or_else(|| model.clone());
     ui.add_enabled_ui(!c.busy, |ui| {
         ui.horizontal(|ui| {
+            // With both modes on, a general conversation can be dev or RH (the rules the engine gets).
+            if c.item_id.is_none() && c.pr_key.is_none() && crate::profile::dev() && crate::profile::has_mode(crate::profile::RH) {
+                ui.label(RichText::new("MODO").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
+                let mode = c.mode();
+                let mut pick = mode.clone();
+                egui::ComboBox::from_id_salt(("mode", &c.id)).selected_text(if mode == crate::profile::RH { "RH" } else { "Dev" }).width(70.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut pick, crate::profile::DEV.to_owned(), "Dev");
+                    ui.selectable_value(&mut pick, crate::profile::RH.to_owned(), "RH");
+                });
+                if pick != mode {
+                    acts.push(Action::SetMode(c.id.clone(), pick));
+                }
+                ui.add_space(12.0);
+            }
             ui.label(RichText::new("MOTOR").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
             let mut pick = engine.clone();
             egui::ComboBox::from_id_salt(("engine", &c.id)).selected_text(if agy { "Antigravity" } else { "Claude Code" }).width(150.0).show_ui(ui, |ui| {
@@ -367,27 +410,15 @@ fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
             ui.add_space(12.0);
             ui.label(RichText::new("MODELO").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
             let mut m = model.clone();
-            egui::ComboBox::from_id_salt(("model", &c.id)).selected_text(model_label).width(260.0).show_ui(ui, |ui| {
+            // Never wider than what is left of the row (the mode picker may share it).
+            let w = (ui.available_width() - 40.0).clamp(120.0, 260.0);
+            egui::ComboBox::from_id_salt(("model", &c.id)).selected_text(model_label).width(w).show_ui(ui, |ui| {
                 for (id, label) in &models {
                     ui.selectable_value(&mut m, id.clone(), label);
                 }
             });
             if m != model {
                 acts.push(Action::SetEngine(c.id.clone(), Some(engine.clone()), Some(m)));
-            }
-            // With both modes on, a general conversation can be dev or RH (the rules the engine gets).
-            if c.item_id.is_none() && c.pr_key.is_none() && crate::profile::dev() && crate::profile::has_mode(crate::profile::RH) {
-                ui.add_space(12.0);
-                ui.label(RichText::new("MODO").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
-                let mode = c.mode();
-                let mut pick = mode.clone();
-                egui::ComboBox::from_id_salt(("mode", &c.id)).selected_text(if mode == crate::profile::RH { "RH" } else { "Dev" }).width(80.0).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut pick, crate::profile::DEV.to_owned(), "Dev");
-                    ui.selectable_value(&mut pick, crate::profile::RH.to_owned(), "RH");
-                });
-                if pick != mode {
-                    acts.push(Action::SetMode(c.id.clone(), pick));
-                }
             }
         });
     });

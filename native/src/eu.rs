@@ -74,6 +74,45 @@ pub fn rules() -> Vec<Rule> {
     fs::read_to_string(memory_file()).unwrap_or_default().lines().filter_map(parse).filter(|r| !r.text.is_empty()).collect()
 }
 
+impl Rule {
+    fn line(&self) -> String {
+        if self.date.is_empty() { format!("- {}", self.text) } else { format!("- {}: {}", self.date, self.text) }
+    }
+}
+
+fn save(rules: &[Rule]) {
+    ensure();
+    let body: String = rules.iter().map(|r| r.line() + "\n").collect();
+    let _ = fs::write(memory_file(), body);
+}
+
+/// Saves a rule with today's date; the same rule twice is kept once. Returns the rule as saved (None when empty).
+pub fn remember(text: &str) -> Option<Rule> {
+    let text = text.trim().trim_end_matches('.').trim().to_owned();
+    if text.is_empty() {
+        return None;
+    }
+    let mut all = rules();
+    if let Some(r) = all.iter().find(|r| r.text.eq_ignore_ascii_case(&text)) {
+        return Some(r.clone());
+    }
+    let r = Rule { date: chrono::Local::now().format("%Y-%m-%d").to_string(), text };
+    all.push(r.clone());
+    save(&all);
+    Some(r)
+}
+
+/// Removes a rule (by its text). Returns true when it was there.
+pub fn forget(text: &str) -> bool {
+    let mut all = rules();
+    let n = all.len();
+    all.retain(|r| r.text != text);
+    if all.len() != n {
+        save(&all);
+    }
+    all.len() != n
+}
+
 /// What goes into every conversation after Jarvis's rules and the team's: the personal instructions and the memory.
 /// Empty when there is neither.
 pub fn prompt_block() -> String {

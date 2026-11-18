@@ -486,7 +486,12 @@ fn tail_chars(s: &str, n: usize) -> String {
 
 fn mark_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\[\[(ABRIR_NO_CLAUDE|IMPLEMENTAR:([^\]\n]+))\]\]").unwrap())
+    RE.get_or_init(|| Regex::new(r"\[\[(ABRIR_NO_CLAUDE|IMPLEMENTAR:([^\]\n]+)|LEMBRAR:([^\]\n]+))\]\]").unwrap())
+}
+
+/// The rules the reply asked Jarvis to remember ([[LEMBRAR: …]] lines), in order.
+pub fn read_remember(text: &str) -> Vec<String> {
+    mark_re().captures_iter(text).filter_map(|c| c.get(3)).map(|m| m.as_str().trim().to_owned()).filter(|r| !r.is_empty()).collect()
 }
 
 /// (open in the Claude app, worktree to implement in)
