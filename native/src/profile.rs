@@ -32,6 +32,14 @@ pub struct Profile {
     pub modes: Vec<String>,
     /// Blocks of the Hoje screen this person turned off (see `dashboard::BLOCKS`); everything else shows.
     pub today_hidden: Vec<String>,
+    /// The guided first run is done (or was skipped). A profile file from before it existed reads as done: only a
+    /// person who never had a profile is guided.
+    #[serde(default = "yes")]
+    pub welcomed: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 impl Default for Profile {
@@ -45,6 +53,7 @@ impl Default for Profile {
             board_token: String::new(),
             modes: vec![DEV.into()],
             today_hidden: Vec::new(),
+            welcomed: true,
         }
     }
 }
@@ -189,7 +198,8 @@ fn store() -> &'static Mutex<Profile> {
         let p = fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| {
             let home = dirs::home_dir().unwrap_or_default();
             let projects = ["Projetos", "Projects", "source\\repos"].iter().map(|d| home.join(d)).find(|d| d.is_dir()).unwrap_or(home);
-            Profile { name: std::env::var("USERNAME").unwrap_or_default(), projects_dir: projects.to_string_lossy().into_owned(), ..Default::default() }
+            // No profile yet: the first run guides this person through it (welcome.rs).
+            Profile { name: std::env::var("USERNAME").unwrap_or_default(), projects_dir: projects.to_string_lossy().into_owned(), welcomed: false, ..Default::default() }
         });
         Mutex::new(p)
     })
@@ -204,6 +214,11 @@ pub fn update(f: impl FnOnce(&mut Profile)) {
     f(&mut p);
     let _ = fs::create_dir_all(crate::settings::data_dir());
     let _ = fs::write(file(), serde_json::to_string_pretty(&*p).unwrap_or_default());
+}
+
+/// Whether the guided first run still has to show.
+pub fn needs_welcome() -> bool {
+    !get().welcomed
 }
 
 pub fn name() -> String {

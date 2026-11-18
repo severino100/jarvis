@@ -160,6 +160,12 @@ fn agy_exe() -> Option<PathBuf> {
     list.into_iter().find(|p| p.exists())
 }
 
+/// Claude Code is on this PC (its installer's folder, or anywhere on the PATH).
+pub fn claude_installed() -> bool {
+    claude_exe().is_absolute()
+        || std::env::var_os("PATH").is_some_and(|path| std::env::split_paths(&path).any(|d| ["claude.exe", "claude.cmd"].iter().any(|n| d.join(n).is_file())))
+}
+
 pub fn gemini_installed() -> bool {
     agy_exe().is_some()
 }

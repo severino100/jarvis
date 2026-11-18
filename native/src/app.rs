@@ -132,6 +132,8 @@ pub struct JarvisApp {
     start_choice: Option<StartChoice>,
     /// Start-up sequence: when it began (None once done or when skipped).
     boot: Option<f64>,
+    /// The guided first run, while it is on screen (a person who never had a profile).
+    welcome: Option<crate::welcome::Welcome>,
     // Kept alive for the whole run: dropping them removes the tray icon / unregisters the hotkey.
     _tray: Option<tray_icon::TrayIcon>,
     _hotkey: Option<global_hotkey::GlobalHotKeyManager>,
@@ -213,6 +215,7 @@ impl JarvisApp {
             view_at: 0.0,
             view_seq: 0,
             boot: (!std::env::args().any(|a| a == "--hidden") && std::env::var("JARVIS_SHOT_RS").is_err() && !motion::reduced()).then_some(-1.0),
+            welcome: (crate::profile::needs_welcome() || shot_view == "welcome").then(crate::welcome::Welcome::new),
             _tray: tray,
             _hotkey: hotkey,
         };
@@ -352,6 +355,44 @@ impl eframe::App for JarvisApp {
         // A view of a mode that was switched off (or asked for by a screenshot) falls back to Hoje.
         if !shown(self.view) {
             self.view = View::Today;
+        }
+
+        // The first run takes the whole window until it is done or skipped.
+        if let Some(w) = &mut self.welcome {
+            let mut done = false;
+            egui::CentralPanel::default().frame(Frame::new().fill(theme::BG).inner_margin(Margin { left: 34, right: 34, top: 28, bottom: 10 })).show(ui, |ui| {
+                paint_grid(ui, acc);
+                ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    let width = ui.available_width().min(760.0);
+                    let pad = ((ui.available_width() - width) / 2.0).max(0.0);
+                    ui.horizontal_top(|ui| {
+                        ui.add_space(pad);
+                        ui.vertical(|ui| {
+                        ui.set_width(width);
+                        ui.horizontal(|ui| {
+                            let (rect, _) = ui.allocate_exact_size(vec2(64.0, 64.0), Sense::hover());
+                            paint_reactor(ui, rect, acc, t, energy, 1.0);
+                            ui.add_space(8.0);
+                            ui.vertical(|ui| {
+                                ui.add_space(12.0);
+                                ui.label(RichText::new("JARVIS").font(ui_kit::display(26.0)).color(theme::BRIGHT).extra_letter_spacing(4.0));
+                                ui.label(RichText::new("PRIMEIRO ARRANQUE").font(ui_kit::display(11.5)).color(acc.light).extra_letter_spacing(2.0));
+                            });
+                        });
+                        ui.add_space(22.0);
+                        done = crate::welcome::view(ui, w, acc);
+                        });
+                    });
+                });
+            });
+            if done {
+                self.welcome = None;
+                self.view = View::Today;
+                self.view_at = now;
+            }
+            self.boot_overlay(ui.ctx(), acc, t, now);
+            notify::draw(ui.ctx(), acc);
+            return;
         }
 
         egui::Panel::left("nav")

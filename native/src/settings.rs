@@ -86,6 +86,10 @@ pub struct State {
 const DEFAULTS_VERSION: u32 = 1;
 
 pub fn data_dir() -> PathBuf {
+    // Dev aid: JARVIS_DATA_DIR=<folder> runs on a throw-away profile (the first run, screenshots), not the real one.
+    if let Some(d) = std::env::var_os("JARVIS_DATA_DIR").filter(|d| !d.is_empty()) {
+        return PathBuf::from(d);
+    }
     dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("Jarvis")
 }
 

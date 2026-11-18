@@ -31,10 +31,10 @@ fn chips<T: PartialEq + Clone>(ui: &mut Ui, current: &mut T, options: &[(T, &str
 }
 
 /// Pack actions that run off the UI thread (git clone / pull) report here.
-static PACK_MSG: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
+pub(crate) static PACK_MSG: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
 static PACK_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-fn pack_job(ctx: egui::Context, job: impl FnOnce() -> Result<String, String> + Send + 'static) {
+pub(crate) fn pack_job(ctx: egui::Context, job: impl FnOnce() -> Result<String, String> + Send + 'static) {
     use std::sync::atomic::Ordering;
     if PACK_BUSY.swap(true, Ordering::SeqCst) {
         return;
