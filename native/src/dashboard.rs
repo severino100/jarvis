@@ -34,6 +34,28 @@ pub struct Extras {
     pub music: crate::music::NowPlaying,
     /// (name, link)
     pub favorites: Vec<(String, String)>,
+    /// Blocks turned off in Definições → O meu Jarvis (keys of `BLOCKS`).
+    pub hidden: Vec<String>,
+}
+
+/// The blocks of the Hoje screen each person may turn off: (key, label, only with the dev mode).
+pub const BLOCKS: [(&str, &str, bool); 10] = [
+    ("trabalho", "O meu trabalho e disponível", true),
+    ("nucleo", "Núcleo (sprint e horas)", true),
+    ("agenda", "Agenda de hoje", false),
+    ("conversas", "Conversas", false),
+    ("tarefas", "Tarefas", false),
+    ("sistema", "Sistema", false),
+    ("musica", "Música", false),
+    ("prs", "PRs", true),
+    ("revisao", "Revisão e QA", true),
+    ("atividade", "Atividade do board", true),
+];
+
+impl Extras {
+    fn on(&self, key: &str) -> bool {
+        !self.hidden.iter().any(|h| h == key)
+    }
 }
 
 const LONG_MONTHS: [&str; 12] = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
@@ -101,7 +123,7 @@ pub fn view(ui: &mut Ui, d: Option<&Dashboard>, x: &Extras, acc: Accent, go: &mu
             ui.allocate_ui_with_layout(vec2(a, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_width(a);
                 enter(ui, 1);
-                core(ui, d, acc, go);
+                core(ui, d, x, acc, go);
             });
             ui.allocate_ui_with_layout(vec2(b, 0.0), Layout::top_down(Align::Min), |ui| {
                 ui.set_width(b);
@@ -118,7 +140,7 @@ pub fn view(ui: &mut Ui, d: Option<&Dashboard>, x: &Extras, acc: Accent, go: &mu
         // Medium window: the core beside the focus, then telemetry beside the conversations.
         ui.columns(2, |cols| {
             stagger(&mut cols[0], since, 1);
-            core(&mut cols[0], d, acc, go);
+            core(&mut cols[0], d, x, acc, go);
             stagger(&mut cols[1], since, 2);
             focus(&mut cols[1], x, acc, go);
         });
@@ -132,7 +154,7 @@ pub fn view(ui: &mut Ui, d: Option<&Dashboard>, x: &Extras, acc: Accent, go: &mu
             music(&mut cols[1], x, acc, go);
         });
     } else {
-        core(ui, d, acc, go);
+        core(ui, d, x, acc, go);
         ui.add_space(12.0);
         focus(ui, x, acc, go);
         ui.add_space(12.0);
@@ -143,7 +165,7 @@ pub fn view(ui: &mut Ui, d: Option<&Dashboard>, x: &Extras, acc: Accent, go: &mu
         stagger(&mut cols[0], since, 4);
         prs(&mut cols[0], x, acc, go);
         stagger(&mut cols[1], since, 5);
-        review(&mut cols[1], d, acc, go);
+        review(&mut cols[1], d, x, acc, go);
         stagger(&mut cols[2], since, 6);
         todos(&mut cols[2], x, acc, go);
     });
@@ -252,7 +274,10 @@ fn ring(p: &egui::Painter, c: egui::Pos2, r: f32, w: f32, frac: f32, color: Colo
     }
 }
 
-fn core(ui: &mut Ui, d: &Dashboard, acc: Accent, go: &mut Option<View>) {
+fn core(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("nucleo") {
+        return;
+    }
     heading(ui, "Núcleo", acc, Some(View::Hours), go);
     let now = Local::now();
     let sprint = match (ui_kit::parse(&d.sprint.start), ui_kit::parse(&d.sprint.finish)) {
@@ -313,6 +338,9 @@ fn core(ui: &mut Ui, d: &Dashboard, acc: Accent, go: &mut Option<View>) {
 
 /// Today's timeline (the item to work on now lives in the Trabalho block above).
 fn focus(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("agenda") {
+        return;
+    }
     heading(ui, "Hoje na agenda", acc, Some(View::Agenda), go);
     panel(ui, acc, |ui| timeline(ui, &x.meetings, acc));
 }
@@ -404,6 +432,9 @@ fn system(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
 }
 
 fn telemetry(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("sistema") {
+        return;
+    }
     heading(ui, "Sistema", acc, None, go);
     panel(ui, acc, |ui| {
         let s = &x.sys;
@@ -433,6 +464,9 @@ fn telemetry(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
 }
 
 fn conversations(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("conversas") {
+        return;
+    }
     heading(ui, if x.dev { "Conversas a trabalhar" } else { "Conversas" }, acc, Some(View::Chat), go);
     panel(ui, acc, |ui| {
         // The personal screen starts from a conversation: write, summarise, analyse, propose.
@@ -469,6 +503,9 @@ fn conversations(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
 /* ---------- PRs, review, personal tasks ---------- */
 
 fn prs(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("prs") {
+        return;
+    }
     heading(ui, "PRs", acc, Some(View::Prs), go);
     panel(ui, acc, |ui| {
         ui.horizontal(|ui| {
@@ -488,7 +525,10 @@ fn prs(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
     });
 }
 
-fn review(ui: &mut Ui, d: &Dashboard, acc: Accent, go: &mut Option<View>) {
+fn review(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("revisao") {
+        return;
+    }
     heading(ui, "Revisão e QA", acc, Some(View::Review), go);
     panel(ui, acc, |ui| {
         let total = d.review.len().max(1) as f32;
@@ -511,6 +551,9 @@ fn review(ui: &mut Ui, d: &Dashboard, acc: Accent, go: &mut Option<View>) {
 }
 
 fn todos(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("tarefas") {
+        return;
+    }
     heading(ui, "Tarefas", acc, Some(View::Tasks), go);
     panel(ui, acc, |ui| {
         if x.todos.is_empty() {
@@ -533,6 +576,9 @@ fn todos(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
 /* ---------- activity feed ---------- */
 
 fn feed(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("atividade") {
+        return;
+    }
     heading(ui, "Atividade", acc, Some(View::Chat), go);
     Frame::new().stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.14))).corner_radius(CornerRadius::same(4)).inner_margin(Margin::symmetric(14, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
@@ -570,6 +616,9 @@ fn stagger(ui: &mut Ui, since: f32, order: usize) {
 /* ---------- work: mine and available, one click from the start screen ---------- */
 
 fn work(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("trabalho") {
+        return;
+    }
     // Mine: returned by QA first, then In Progress, then Planned.
     let mut mine: Vec<&Item> = d.now.iter().collect();
     mine.sort_by_key(|i| (i.back.is_none(), i.column != "In Progress"));
@@ -702,6 +751,9 @@ fn media_button(ui: &mut Ui, icon: &str, big: bool, acc: Accent) -> egui::Respon
 }
 
 fn music(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("musica") {
+        return;
+    }
     use crate::{
         app::{post, AppEvent},
         music::{clock, open_app, Cmd},

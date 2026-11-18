@@ -149,6 +149,10 @@ fn view_from(name: &str) -> View {
         "prs" => View::Prs,
         "cleanup" => View::Cleanup,
         "settings" => View::Settings,
+        "eu" => {
+            settings_view::open_mine();
+            View::Settings
+        }
         _ => View::Today,
     }
 }
@@ -573,7 +577,7 @@ impl JarvisApp {
             View::Chat => ("Chat", "A análise é feita aqui, por escrito ou por voz. A implementação segue para o Claude Code ou o Antigravity."),
             View::Hours => ("Horas do sprint", "As tuas tarefas deste sprint: estimativa, Work Done e o que falta preencher."),
             View::Cleanup => ("Limpeza", "Worktrees dos itens e anexos descarregados. Só limpa o que já não tem trabalho por enviar."),
-            View::Settings => ("Definições", "Cor, tamanho, avisos, quem responde e voz. O Notion está em Tarefas."),
+            View::Settings => ("Definições", "Cor, tamanho, avisos, quem responde e voz. O Notion está em Tarefas; o que é só teu, em O meu Jarvis."),
         };
         if self.view != View::Today {
             ui.label(RichText::new(title.to_uppercase()).heading().color(theme::BRIGHT).extra_letter_spacing(4.0));
@@ -679,6 +683,7 @@ impl JarvisApp {
         feed.truncate(8);
         dashboard::Extras {
             dev: crate::profile::dev(),
+            hidden: crate::profile::get().today_hidden,
             meetings: agenda::today_all(&self.agenda),
             todos: tasks::open_list(),
             prs: prs.active.iter().filter(|p| !p.open_threads.is_empty()).map(|p| (p.title.clone(), p.id, p.open_threads.len(), p.url.clone())).collect(),

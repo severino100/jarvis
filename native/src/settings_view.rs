@@ -168,8 +168,31 @@ fn profile_panel(ui: &mut Ui, acc: Accent) {
     }
 }
 
+/// Which part of Definições is open: the general settings or "O meu Jarvis".
+static MINE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Opens Definições on "O meu Jarvis" (screenshots: JARVIS_SHOT_VIEW=eu).
+pub fn open_mine() {
+    MINE.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// Returns true when the look changed (accent or size), so the app re-applies the style.
 pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
+    use std::sync::atomic::Ordering;
+    let mine = MINE.load(Ordering::Relaxed);
+    ui.horizontal(|ui| {
+        if button(ui, "Geral", !mine, acc).clicked() {
+            MINE.store(false, Ordering::Relaxed);
+        }
+        if button(ui, "O meu Jarvis", mine, acc).on_hover_text("O que usas, o que vês no Hoje e o que o Jarvis aprendeu contigo").clicked() {
+            MINE.store(true, Ordering::Relaxed);
+        }
+    });
+    ui.add_space(12.0);
+    if mine {
+        mine_panel(ui, acc);
+        return false;
+    }
     let mut s: Settings = settings::load();
     let before = s.clone();
     let mut look = false;
@@ -275,6 +298,174 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
         settings::update(|x| *x = s);
     }
     look
+}
+
+/// "O meu Jarvis": the modes, the blocks of Hoje, and what this person taught Jarvis (instructions, memory, skills).
+/// Everything here lives on this PC (%APPDATA%\Jarvis\perfil.json and %APPDATA%\Jarvis\eu).
+fn mine_panel(ui: &mut Ui, acc: Accent) {
+    use crate::{eu, profile};
+    use std::sync::Mutex;
+    /// The instructions being edited (None: not loaded yet) and whether they were just saved.
+    static INSTRUCTIONS: Mutex<Option<String>> = Mutex::new(None);
+    static SAVED: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    /// The rule being edited: (its text before, the new text).
+    static EDITING: Mutex<Option<(String, String)>> = Mutex::new(None);
+
+    let mut p = profile::get();
+    let before = p.clone();
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        row(ui, "Para que usas o Jarvis", "Cada modo traz os seus ecrãs. Podes ter os dois.", |ui| {
+            ui.vertical(|ui| {
+                for (mode, label, hint) in [
+                    (profile::DEV, "Desenvolvimento", "o board, os PRs, as horas do sprint e a limpeza de worktrees"),
+                    (profile::RH, "Recursos Humanos", "o assistente pessoal de RH: escreve, resume, analisa e propõe"),
+                ] {
+                    let mut on = p.modes.iter().any(|m| m == mode);
+                    ui.horizontal(|ui| {
+                        // At least one mode stays on.
+                        let last = on && p.modes.len() == 1;
+                        if ui.add_enabled(!last, egui::Checkbox::new(&mut on, RichText::new(label).color(theme::BRIGHT))).changed() {
+                            if on {
+                                p.modes.push(mode.to_owned());
+                            } else {
+                                p.modes.retain(|m| m != mode);
+                            }
+                        }
+                        ui.label(RichText::new(hint).small().color(theme::MUTED));
+                    });
+                }
+            });
+        });
+        row(ui, "No ecrã Hoje", "Os blocos que queres ver quando abres o Jarvis.", |ui| {
+            let dev = p.modes.iter().any(|m| m == profile::DEV);
+            for (key, label, dev_only) in crate::dashboard::BLOCKS {
+                if dev_only && !dev {
+                    continue;
+                }
+                let mut on = !p.today_hidden.iter().any(|h| h == key);
+                if ui.checkbox(&mut on, label).changed() {
+                    if on {
+                        p.today_hidden.retain(|h| h != key);
+                    } else {
+                        p.today_hidden.push(key.to_owned());
+                    }
+                }
+            }
+        });
+    });
+    if p != before {
+        profile::update(|x| *x = p);
+    }
+    ui.add_space(10.0);
+
+    let name = profile::name();
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        row(ui, "As tuas instruções", &format!("O que o Jarvis deve saber de ti em todas as conversas: o tom, como assinas, o que nunca fazer. As regras do Jarvis (confirmar antes de enviar, criar ou apagar, e os dados pessoais) ficam sempre por cima destas. Ficam em {}.", eu::instructions_file().display()), |ui| {
+            let mut guard = INSTRUCTIONS.lock().unwrap();
+            let text = guard.get_or_insert_with(eu::instructions);
+            ui.vertical(|ui| {
+                ui.add(egui::TextEdit::multiline(text).hint_text(format!("Por exemplo: Trabalho em Recursos Humanos. Trata-me por tu. Assino como \"{name} · Recursos Humanos\". Emails curtos, sem emojis.")).desired_rows(5).desired_width(f32::INFINITY));
+                ui.horizontal(|ui| {
+                    let changed = *text != eu::instructions();
+                    if ui.add_enabled_ui(changed, |ui| button(ui, "Guardar", true, acc)).inner.clicked() {
+                        eu::set_instructions(text);
+                        *SAVED.lock().unwrap() = Some(std::time::Instant::now());
+                    }
+                    if changed && button(ui, "Desfazer alterações", false, acc).clicked() {
+                        *text = eu::instructions();
+                    }
+                    if SAVED.lock().unwrap().is_some_and(|t| t.elapsed().as_secs() < 4) {
+                        ui.label(RichText::new("Guardado. Conta a partir da próxima mensagem.").color(theme::GREEN));
+                    }
+                });
+            });
+        });
+    });
+    ui.add_space(10.0);
+
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        let rules = eu::rules();
+        row(ui, "O que o Jarvis aprendeu", "Quando dizes \"lembra-te que…\" ou corriges uma preferência, o Jarvis guarda a regra aqui e lê-a em todas as conversas. Podes mudar ou apagar qualquer uma.", |ui| {
+            ui.vertical(|ui| {
+                if rules.is_empty() {
+                    ui.label(RichText::new("Ainda nada. Numa conversa, diz por exemplo: \"lembra-te que assino sempre como Rita\".").color(theme::MUTED));
+                }
+                let mut editing = EDITING.lock().unwrap();
+                let (mut forget, mut save) = (None, None);
+                for r in &rules {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(if r.date.is_empty() { "—".to_owned() } else { ui_kit::short_date(&format!("{}T12:00:00Z", r.date)) }).monospace().size(11.5).color(theme::FAINT));
+                        match editing.as_mut() {
+                            Some((old, new)) if *old == r.text => {
+                                let w = (ui.available_width() - 220.0).max(160.0);
+                                let enter = ui.add(egui::TextEdit::singleline(new).desired_width(w)).lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                if button(ui, "Guardar", true, acc).clicked() || enter {
+                                    save = Some((old.clone(), new.clone()));
+                                }
+                                if button(ui, "Cancelar", false, acc).clicked() {
+                                    save = Some((String::new(), String::new()));
+                                }
+                            }
+                            _ => {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    if button(ui, "Apagar", false, acc).clicked() {
+                                        forget = Some(r.text.clone());
+                                    }
+                                    if button(ui, "Editar", false, acc).clicked() {
+                                        save = None;
+                                        *editing = Some((r.text.clone(), r.text.clone()));
+                                    }
+                                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                        ui.add(egui::Label::new(RichText::new(&r.text).color(theme::TEXT)).wrap());
+                                    });
+                                });
+                            }
+                        }
+                    });
+                }
+                if let Some((old, new)) = save {
+                    if !old.is_empty() {
+                        eu::edit(&old, &new);
+                    }
+                    *editing = None;
+                }
+                if let Some(t) = forget {
+                    eu::forget(&t);
+                }
+            });
+        });
+    });
+    ui.add_space(10.0);
+
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        row(ui, "As tuas skills", "Comandos teus para o Claude Code: cada skill é uma pasta com um SKILL.md dentro da pasta skills. Só tu as tens; as da equipa vêm do pacote.", |ui| {
+            ui.vertical(|ui| {
+                let skills = eu::skills();
+                if skills.is_empty() {
+                    ui.label(RichText::new("Ainda não tens skills pessoais.").color(theme::MUTED));
+                }
+                for (name, about, _) in &skills {
+                    ui.horizontal(|ui| {
+                        ui_kit::diamond(ui, true, acc.main, 3.5);
+                        ui.label(RichText::new(format!("/eu:{name}")).monospace().color(acc.light));
+                        if !about.is_empty() {
+                            ui.add(egui::Label::new(RichText::new(about).small().color(theme::MUTED)).truncate());
+                        }
+                    });
+                }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if button(ui, "Abrir a pasta das skills", false, acc).clicked() {
+                        eu::ensure();
+                        crate::brain::open(&eu::skills_dir().to_string_lossy());
+                    }
+                    if button(ui, "Abrir a pasta \"eu\"", false, acc).on_hover_text("Instruções, memória e skills, em ficheiros de texto").clicked() {
+                        crate::brain::open(&eu::ensure().to_string_lossy());
+                    }
+                });
+            });
+        });
+    });
 }
 
 /// Zoom from the "Tamanho do texto" setting (on top of the Windows scale, which egui already applies).

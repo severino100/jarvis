@@ -102,6 +102,44 @@ pub fn remember(text: &str) -> Option<Rule> {
     Some(r)
 }
 
+/// Changes a rule's text, keeping its date; an empty text removes it.
+pub fn edit(old: &str, new: &str) {
+    let new = new.trim();
+    if new.is_empty() {
+        forget(old);
+        return;
+    }
+    let mut all = rules();
+    if let Some(r) = all.iter_mut().find(|r| r.text == old) {
+        r.text = new.to_owned();
+        save(&all);
+    }
+}
+
+pub fn set_instructions(text: &str) {
+    ensure();
+    let t = text.trim();
+    let _ = fs::write(instructions_file(), if t.is_empty() { String::new() } else { format!("{t}\n") });
+}
+
+/// The personal skills: (name, what it does from its SKILL.md, folder).
+pub fn skills() -> Vec<(String, String, PathBuf)> {
+    let mut out: Vec<(String, String, PathBuf)> = fs::read_dir(skills_dir())
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.join("SKILL.md").is_file())
+        .map(|p| {
+            let text = fs::read_to_string(p.join("SKILL.md")).unwrap_or_default();
+            let about = text.lines().find_map(|l| l.trim().strip_prefix("description:")).unwrap_or_default().trim().trim_matches('"').to_owned();
+            (p.file_name().unwrap_or_default().to_string_lossy().into_owned(), about, p)
+        })
+        .collect();
+    out.sort();
+    out
+}
+
 /// Removes a rule (by its text). Returns true when it was there.
 pub fn forget(text: &str) -> bool {
     let mut all = rules();

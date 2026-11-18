@@ -30,6 +30,8 @@ pub struct Profile {
     /// What this person uses Jarvis for: "dev" (board, PRs, hours, cleanup) and/or "rh" (the personal HR assistant).
     /// The menu and the Hoje screen only show what belongs to the modes that are on. Missing in older files: ["dev"].
     pub modes: Vec<String>,
+    /// Blocks of the Hoje screen this person turned off (see `dashboard::BLOCKS`); everything else shows.
+    pub today_hidden: Vec<String>,
 }
 
 impl Default for Profile {
@@ -42,6 +44,7 @@ impl Default for Profile {
             active_pack: String::new(),
             board_token: String::new(),
             modes: vec![DEV.into()],
+            today_hidden: Vec::new(),
         }
     }
 }
