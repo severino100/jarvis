@@ -10,6 +10,29 @@ Levar o Jarvis à equipa de RH com a mesma lógica que já tem para o desenvolvi
 2. **Ver o estado do que fizemos.** Por exemplo: "dos 14 candidatos contactados ontem, 5 responderam".
 3. **Um sítio para tudo:** vagas abertas, quem foi contactado, respostas, entrevistas e estatísticas.
 
+## Princípio: o assistente de cada uma
+
+O Jarvis de RH não é um programa de recrutamento com um processo fixo. É **o assistente pessoal de cada pessoa de RH**, o "ChatGPT dela", que já sabe o que é uma vaga, um candidato e um contacto. Cada pessoa usa-o como preferir e vai-o ensinando.
+
+Consequências para o desenho:
+
+- **A conversa vem primeiro.** Tudo o que os ecrãs fazem também se pede por escrito ou por voz: "quantos responderam ontem?", "escreve um InMail para este perfil", "cria a vaga do pedido da Ana". Os ecrãs (Vagas, Contactos, Estatísticas) são atalhos, não o único caminho.
+- **As vagas, os candidatos e os contactos são ferramentas da IA.** A IA lê e escreve os dados de recrutamento (com um comando do próprio Jarvis, por exemplo `jarvis.exe --rh ...`, ou uma skill), por isso pode responder a qualquer pergunta sobre eles e registar o que foi feito na conversa.
+- **Cada pessoa ensina o seu Jarvis.** Não é treino de modelo: é memória e instruções que a IA lê em todas as conversas, guardadas no PC de cada pessoa (`%APPDATA%\Jarvis\eu\`):
+  - **Instruções pessoais** (`instrucoes.md`): o tom, como assina, o que nunca fazer. Editáveis num ecrã simples.
+  - **Memória:** quando a pessoa diz "lembra-te que…" ou corrige a IA, a IA guarda a regra e mostra-a ("Guardei: os InMails para devs são curtos e sem emojis"). A pessoa pode ver, mudar e apagar tudo o que está guardado.
+  - **Exemplos de estilo:** quando a pessoa edita um rascunho antes de enviar, a versão final fica como exemplo para as próximas mensagens.
+  - **Modelos e atalhos pessoais:** "a partir de agora, quando eu disser *triagem*, avalia os perfis colados contra a vaga aberta e faz uma tabela". A IA cria a skill pessoal, que passa a ser um comando dela.
+- **O pacote da equipa dá o ponto de partida, a pessoa ajusta.** O pacote de RH traz modelos, fases e regras comuns (RGPD, tom da empresa). As instruções pessoais de cada uma acrescentam-se por cima. As regras de RGPD e de "nada sai sem confirmação" não se podem desligar.
+- **Cada pessoa escolhe o que vê.** O que aparece no Hoje (respostas, vagas, agenda, tarefas, música) e que ecrãs ficam no menu é escolha de cada uma.
+- **Também serve para o resto do trabalho.** Escrever um email difícil, resumir uma reunião, preparar uma avaliação de desempenho, rever uma política interna: é um assistente geral, com o recrutamento como especialidade.
+
+### O que isto pede a mais
+
+- **Uma persona geral de RH** (`docs/persona-rh.md`), diferente da de dev: assistente pessoal, não "só análise e preparação"; propõe e escreve, mas não envia nem apaga sem confirmação.
+- **Instalação sem compilar.** A equipa de RH não vai correr `cargo build`. É preciso um instalador pronto (o `.exe` compilado e um instalador que também instala e liga o Claude Code), e um primeiro arranque guiado: nome, contas (IA, email), pacote da equipa, e o que quer ver no Hoje.
+- **Conta de IA de cada pessoa.** O Jarvis usa o Claude Code (conta Claude) ou o Antigravity (conta Google) de quem o usa. Cada pessoa de RH precisa de uma, e é preciso decidir o plano e quem paga.
+
 ## Ponto de partida
 
 - **Não há ATS** (*Applicant Tracking System*: o programa de RH onde ficam vagas e candidatos). Hoje as vagas vivem em Excel, em emails e no LinkedIn Recruiter. O Jarvis passa a fazer esse papel, numa versão simples.
@@ -166,6 +189,7 @@ As skills do pacote de RH (avaliar perfil, escrever descrição de vaga, gerar p
 
 ## Fases
 
+0. **O assistente pessoal.** Instalador sem compilar e primeiro arranque guiado; persona de RH; conversa geral; instruções pessoais, memória ("lembra-te que…") com ecrã para ver e apagar; escolher o que aparece no Hoje e no menu.
 1. **Vagas, pedidos e ligações.** Ecrã Contas (email e LinkedIn); modelo de dados e gravação local; ecrã Vagas (criar, editar, fechar); `mail.ps1` a ler pedidos; "já há vaga?" e rascunho da descrição; importação de vagas do Excel; persona de RH.
 2. **Candidatos e pesquisa.** Pesquisa booleana gerada; importar perfil (texto, link ou PDF); nota explicada; aviso de duplicados; ecrã Candidato.
 3. **Contactos e respostas.** Mensagens personalizadas; registo de contactos; deteção de respostas (notificações do Recruiter e emails diretos); seguimentos; ecrã Contactos. No fim desta fase já se responde a "dos de ontem, quantos responderam".
@@ -182,6 +206,8 @@ As skills do pacote de RH (avaliar perfil, escrever descrição de vaga, gerar p
 - **Resumo de voz de manhã:** "Tens 3 respostas novas, 2 entrevistas, e a vaga de Frontend está parada há 5 dias."
 
 ## Em aberto
+
+- Que conta de IA tem cada pessoa de RH (Claude ou Google) e quem paga.
 
 - Se a equipa de RH usa o Outlook clássico ou o novo (decide entre COM e Graph), e quem na IT pode registar a aplicação no Entra ID.
 - Formato dos pedidos de recrutamento hoje (email livre, formulário, Teams?): decide como os detetamos.
