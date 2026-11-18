@@ -211,7 +211,7 @@ impl JarvisApp {
         }
         // JARVIS_SHOT_START=<id>: the engine question of "Começar", for screenshots.
         if let Some(id) = std::env::var("JARVIS_SHOT_START").ok().and_then(|v| v.parse().ok()) {
-            app.start_choice = Some(StartChoice { id, title: "Exemplo de item".into(), agy: false, model: "auto".into(), remember: false });
+            app.start_choice = Some(StartChoice { id, title: "Exemplo de item".into(), engine: "claude".into(), model: "auto".into(), remember: false });
         }
         // JARVIS_SHOT_NOTIFY=1: two notices inside the window, for screenshots.
         if std::env::var("JARVIS_SHOT_NOTIFY").is_ok() {
@@ -617,7 +617,7 @@ impl JarvisApp {
                     let start = c.messages.iter().rposition(|m| m.role == "user").unwrap_or(0);
                     let steps: usize = c.messages[start..].iter().map(|m| m.tools.len()).sum();
                     let secs = c.messages.get(start).and_then(|m| ui_kit::parse(&m.at)).map(|t| (chrono::Local::now() - t).num_seconds().max(0)).unwrap_or(0);
-                    let engine = if c.engine.as_deref() == Some("antigravity") { "Antigravity" } else { "Claude Code" };
+                    let engine = chat::engine_label(c.engine.as_deref().unwrap_or_else(|| chat::engine_of(&chat::engine().model)));
                     (c.id.clone(), c.title.clone(), engine.to_owned(), secs, steps)
                 })
                 .collect()
@@ -992,13 +992,11 @@ impl JarvisApp {
         let title = self.board.with(|b| {
             b.data.as_ref().and_then(|d| d.now.iter().chain(&d.review).chain(&d.refined).find(|i| i.id == id).map(|i| i.title.clone())).unwrap_or_default()
         });
-        let defaults = chat::engine();
-        let agy = defaults.model == "gemini" && brain::gemini_installed();
-        let model = if agy { defaults.agy_model } else { defaults.claude_model };
-        self.start_choice = Some(StartChoice { id, title, agy, model: if model.is_empty() { "auto".into() } else { model }, remember: false });
+        let engine = Some(chat::engine_of(&chat::engine().model)).filter(|e| chat::engine_installed(e)).unwrap_or("claude");
+        self.start_choice = Some(StartChoice { id, title, engine: engine.into(), model: chat_view::default_model(engine), remember: false });
     }
 
-    /// The question before an analysis starts: Claude Code or Antigravity, and which model.
+    /// The question before an analysis starts: Claude Code, Antigravity or Codex, and which model.
     fn start_dialog(&mut self, ctx: &egui::Context, acc: theme::Accent) {
         let Some(choice) = self.start_choice.as_mut() else { return };
         let mut go = false;
@@ -1007,7 +1005,7 @@ impl JarvisApp {
             .backdrop_color(theme::alpha(theme::BG, 0.75))
             .frame(Frame::new().fill(theme::GLASS).stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.3))).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(24)))
             .show(ctx, |ui| {
-                ui.set_width(560.0);
+                ui.set_width(720.0);
                 ui.horizontal(|ui| {
                     ui_kit::id_link(ui, choice.id, &azdo::item_url(choice.id), acc);
                     ui.label(RichText::new("Com quem queres analisar?").font(ui_kit::display(theme::size::SUBTITLE)).color(theme::BRIGHT));
@@ -1016,15 +1014,16 @@ impl JarvisApp {
                     ui.add(egui::Label::new(RichText::new(&choice.title).color(theme::MUTED)).truncate());
                 }
                 ui.add_space(14.0);
-                let agy_ok = brain::gemini_installed();
-                ui.columns(2, |cols| {
-                    for (col, agy, name, text) in [
-                        (0, false, "Claude Code", "Lê o código e o item, propõe o plano, cria as tarefas e o worktree quando aprovares. Gasta a tua utilização do Claude."),
-                        (1, true, "Antigravity", "Gemini, Claude ou GPT pela tua conta Google. Lê o código, propõe o plano e, com o teu sim, cria as tarefas e o worktree. Não gasta a utilização do Claude."),
+                ui.columns(3, |cols| {
+                    for (col, engine, text, missing) in [
+                        (0, "claude", "Lê o código e o item, propõe o plano, cria as tarefas e o worktree quando aprovares. Gasta a tua utilização do Claude.", ""),
+                        (1, "antigravity", "Gemini, Claude ou GPT pela tua conta Google. Lê o código, propõe o plano e, com o teu sim, cria as tarefas e o worktree.", "Indisponível: falta o Antigravity CLI (agy)."),
+                        (2, "codex", "GPT pela tua conta ChatGPT. Lê o código e propõe o plano; corre comandos numa sandbox com escrita só na pasta dos projetos.", "Indisponível: instala a app Codex ou o Codex CLI."),
                     ] {
+                        let name = chat::engine_label(engine);
                         let ui = &mut cols[col];
-                        let selected = choice.agy == agy;
-                        let enabled = !agy || agy_ok;
+                        let selected = choice.engine == engine;
+                        let enabled = chat::engine_installed(engine);
                         let r = Frame::new()
                             .fill(if selected { theme::alpha(acc.main, 0.14) } else { theme::alpha(acc.main, 0.03) })
                             .stroke(Stroke::new(if selected { 1.5 } else { 1.0 }, theme::alpha(acc.main, if selected { 0.8 } else { 0.2 })))
@@ -1032,28 +1031,28 @@ impl JarvisApp {
                             .inner_margin(Margin::same(14))
                             .show(ui, |ui| {
                                 ui.set_width(ui.available_width());
-                                ui.set_min_height(118.0);
+                                ui.set_min_height(150.0);
                                 ui.horizontal(|ui| {
                                     ui_kit::diamond(ui, selected, if selected { acc.main } else { theme::MUTED }, 5.0);
                                     ui.label(RichText::new(name.to_uppercase()).font(ui_kit::display(15.0)).color(if selected { theme::BRIGHT } else { theme::TEXT }).extra_letter_spacing(1.4));
                                 });
                                 ui.add_space(4.0);
-                                ui.label(RichText::new(if enabled { text } else { "Indisponível: falta o Antigravity CLI (agy)." }).size(13.0).color(theme::MUTED));
+                                ui.label(RichText::new(if enabled { text } else { missing }).size(13.0).color(theme::MUTED));
                             })
                             .response
                             .interact(egui::Sense::click());
                         if r.clicked() && enabled && !selected {
-                            choice.agy = agy;
-                            choice.model = "auto".into();
+                            choice.engine = engine.into();
+                            choice.model = chat_view::default_model(engine);
                         }
                         if r.double_clicked() && enabled {
-                            choice.agy = agy;
+                            choice.engine = engine.into();
                             go = true;
                         }
                     }
                 });
                 ui.add_space(12.0);
-                let models = chat_view::model_options(choice.agy);
+                let models = chat_view::model_options(&choice.engine);
                 let label = models.iter().find(|(id, _)| *id == choice.model).map(|(_, l)| l.clone()).unwrap_or_else(|| choice.model.clone());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("MODELO").font(ui_kit::display(11.5)).color(theme::MUTED).extra_letter_spacing(1.4));
@@ -1086,15 +1085,15 @@ impl JarvisApp {
             let c = self.start_choice.take().unwrap();
             if c.remember {
                 settings::update(|s| {
-                    s.model = if c.agy { "gemini".into() } else { "auto".into() };
-                    if c.agy {
-                        s.agy_model = c.model.clone();
-                    } else {
-                        s.claude_model = c.model.clone();
+                    s.model = chat::setting_of(&c.engine).into();
+                    match c.engine.as_str() {
+                        "antigravity" => s.agy_model = c.model.clone(),
+                        "codex" => s.codex_model = c.model.clone(),
+                        _ => s.claude_model = c.model.clone(),
                     }
                 });
             }
-            self.start_confirmed(c.id, if c.agy { "antigravity" } else { "claude" }, &c.model);
+            self.start_confirmed(c.id, &c.engine, &c.model);
         } else if cancel {
             self.start_choice = None;
         }
@@ -1221,6 +1220,22 @@ impl JarvisApp {
                 let _ = std::process::Command::new(exe).arg(&w).spawn();
                 self.chats.mark_implemented(id, "antigravity", &format!("Abri o Antigravity em {w} e copiei o pedido: cola-o no agente."));
                 flash("Antigravity aberto. Pedido copiado.");
+            }
+            "codex" => {
+                let Some(exe) = brain::codex_exe() else {
+                    self.chats.add_note(id, "Não encontrei o Codex instalado.", "error");
+                    return;
+                };
+                // The interactive Codex in its own console, in the worktree, with the request as its first message.
+                let model = Some(settings::load().codex_model).filter(|m| !m.is_empty() && m != "auto");
+                let mut cmd = std::process::Command::new(exe);
+                if let Some(m) = &model {
+                    cmd.args(["-m", m]);
+                }
+                use std::os::windows::process::CommandExt;
+                let _ = cmd.arg(&prompt).current_dir(dir).creation_flags(0x0000_0010).spawn();
+                self.chats.mark_implemented(id, "codex", &format!("Abri o Codex num terminal em {w}, já com o pedido."));
+                flash("Codex aberto no worktree.");
             }
             _ => {
                 let folder = if pack { dir.join(".jarvis") } else { dir.to_path_buf() };
@@ -1396,7 +1411,8 @@ pub fn paint_reactor(ui: &Ui, rect: Rect, acc: theme::Accent, phase: f32, energy
 struct StartChoice {
     id: i64,
     title: String,
-    agy: bool,
+    /// claude | antigravity | codex
+    engine: String,
     model: String,
     remember: bool,
 }

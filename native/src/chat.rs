@@ -62,13 +62,14 @@ pub struct Chat {
     pub pr_key: Option<String>,
     pub session_id: Option<String>,
     pub agy_conversation: Option<String>,
+    pub codex_thread: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub messages: Vec<Msg>,
     pub handed_off: bool,
     pub worktree: Option<String>,
     pub implemented_in: Option<String>,
-    /// claude | antigravity, chosen in this conversation (None: the default from Definições).
+    /// claude | antigravity | codex, chosen in this conversation (None: the default from Definições).
     pub engine: Option<String>,
     /// Model for that engine (None: automatic).
     pub engine_model: Option<String>,
@@ -129,7 +130,7 @@ pub enum VoiceMsg {
 /// Engine choice from the settings.
 pub fn engine() -> Engine {
     let s = crate::settings::load();
-    Engine { model: s.model, claude_model: s.claude_model, agy_model: s.agy_model }
+    Engine { model: s.model, claude_model: s.claude_model, agy_model: s.agy_model, codex_model: s.codex_model }
 }
 
 #[derive(Clone)]
@@ -139,13 +140,58 @@ pub struct Chats {
     ctx: egui::Context,
 }
 
-/// auto (Claude, Gemini when Claude has no usage) | claude | gemini, and the Claude model pick (auto | sonnet | opus).
+/// auto (Claude, Gemini when Claude has no usage) | claude | gemini | codex, and each engine's model pick.
 #[derive(Clone)]
 pub struct Engine {
     pub model: String,
     pub claude_model: String,
     /// Antigravity model id (`agy models`), or auto for its own default.
     pub agy_model: String,
+    /// Codex model id (`codex debug models`), or auto for the one in the user's Codex settings.
+    pub codex_model: String,
+}
+
+/// The engine a settings value stands for: claude | antigravity | codex.
+pub fn engine_of(model_setting: &str) -> &'static str {
+    match model_setting {
+        "gemini" => "antigravity",
+        "codex" => "codex",
+        _ => "claude",
+    }
+}
+
+/// The settings value that makes an engine the default.
+pub fn setting_of(engine: &str) -> &'static str {
+    match engine {
+        "antigravity" => "gemini",
+        "codex" => "codex",
+        _ => "auto",
+    }
+}
+
+pub fn engine_label(engine: &str) -> &'static str {
+    match engine {
+        "antigravity" => "Antigravity",
+        "codex" => "Codex",
+        _ => "Claude Code",
+    }
+}
+
+pub fn engine_installed(engine: &str) -> bool {
+    match engine {
+        "antigravity" => brain::gemini_installed(),
+        "codex" => brain::codex_installed(),
+        _ => true,
+    }
+}
+
+/// Which engine wrote an assistant message.
+pub fn msg_engine(m: &Msg) -> &'static str {
+    match m.model.as_deref() {
+        Some("gemini" | "antigravity") => "antigravity",
+        Some("codex") => "codex",
+        _ => "claude",
+    }
 }
 
 pub fn now() -> String {
@@ -391,8 +437,8 @@ impl Chats {
                 c.title = text.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(60).collect();
             }
             engine = c.engine_for(engine);
-            // Neither engine can resume the other's session: each gets, as text, what the other answered since.
-            history = (catch_up(&c.messages, "claude"), catch_up(&c.messages, "antigravity"));
+            // No engine can resume another's session: each gets, as text, what the others answered since.
+            history = ["claude", "antigravity", "codex"].map(|e| catch_up(&c.messages, e));
             c.messages.push(Msg { voice, ..msg("user", text.clone()) });
             if let Some(summary) = c.carry.take() {
                 prompt_text = format!("Resumo da sessão anterior desta conversa (é uma sessão nova; parte daqui):
@@ -418,14 +464,14 @@ Mensagem de {}:
         true
     }
 
-    fn turn(&self, id: &str, text: &str, voice: bool, history: &(String, String), item_id: Option<i64>, turn_start: usize, engine: Engine) {
+    fn turn(&self, id: &str, text: &str, voice: bool, history: &[String; 3], item_id: Option<i64>, turn_start: usize, engine: Engine) {
         let started = Instant::now();
         let stop = self.inner.lock().unwrap().running.get(id).cloned().unwrap_or_default();
         let prompt = if voice { format!("{} {text}", brain::VOICE_TAG) } else { text.to_owned() };
-        let claude_prompt = if history.0.is_empty() {
+        let claude_prompt = if history[0].is_empty() {
             prompt.clone()
         } else {
-            format!("Entretanto a conversa continuou no Antigravity (outro motor), que não está na tua sessão:\n{}\n\nMensagem atual de {}:\n{prompt}", history.0, crate::profile::name())
+            format!("Entretanto a conversa continuou noutro motor, que não está na tua sessão:\n{}\n\nMensagem atual de {}:\n{prompt}", history[0], crate::profile::name())
         };
         let claude_model = match engine.claude_model.as_str() {
             m @ ("sonnet" | "opus" | "haiku") => m.to_owned(),
@@ -433,32 +479,38 @@ Mensagem de {}:
             _ => "sonnet".into(),
         };
         let agy_model = Some(engine.agy_model.as_str()).filter(|m| !m.is_empty() && *m != "auto");
+        let codex_model = Some(engine.codex_model.as_str()).filter(|m| !m.is_empty() && *m != "auto");
 
-        let run = |gemini: bool| -> Result<brain::Outcome, String> {
-            let (session, conversation, first, branch) = self.with(|cs| {
-                cs.iter().find(|c| c.id == id).map(|c| (c.session_id.clone(), c.agy_conversation.clone(), c.session_id.is_none(), c.branch.clone())).unwrap_or_default()
+        let run = |kind: &'static str| -> Result<brain::Outcome, String> {
+            let (session, conversation, thread, branch) = self.with(|cs| {
+                cs.iter().find(|c| c.id == id).map(|c| (c.session_id.clone(), c.agy_conversation.clone(), c.codex_thread.clone(), c.branch.clone())).unwrap_or_default()
             });
             let prep = item_id.zip(branch).map(|(id, branch)| brain::Prep { id, branch });
             // Jarvis reads the item itself, once per session: each engine keeps it in its own conversation after that
             // (Claude resumes its session, agy its conversation). Asked again only with an explicit item request.
-            let fresh = if gemini { conversation.is_none() } else { first };
+            let fresh = match kind {
+                "antigravity" => conversation.is_none(),
+                "codex" => thread.is_none(),
+                _ => session.is_none(),
+            };
             let item = match item_id {
                 Some(i) if fresh || crate::profile::skill_command().is_some_and(|c| text.starts_with(&c)) => brain::item_context(i),
                 _ => String::new(),
             };
-            let engine_name = if gemini { "antigravity" } else { "claude" };
-            let mut on = |ev: Ev| self.apply(id, ev, gemini, engine_name);
-            if gemini {
-                brain::ask_gemini(&prompt, &history.1, &item, conversation.as_deref(), agy_model, prep.as_ref(), &stop, &mut on)
-            } else {
-                brain::ask_claude(&claude_prompt, &item, &claude_model, session.as_deref(), &stop, &mut on)
+            let mut on = |ev: Ev| self.apply(id, ev, kind);
+            match kind {
+                "antigravity" => brain::ask_gemini(&prompt, &history[1], &item, conversation.as_deref(), agy_model, prep.as_ref(), &stop, &mut on),
+                "codex" => brain::ask_codex(&prompt, &history[2], &item, thread.as_deref(), codex_model, &stop, &mut on),
+                _ => brain::ask_claude(&claude_prompt, &item, &claude_model, session.as_deref(), &stop, &mut on),
             }
         };
 
         let result = if engine.model == "gemini" {
-            run(true)
+            run("antigravity")
+        } else if engine.model == "codex" {
+            run("codex")
         } else {
-            match run(false) {
+            match run("claude") {
                 Err(e) if engine.model == "auto" && brain::is_limit_error(&e) && brain::gemini_installed() => {
                     self.edit(id, false, |c| {
                         for m in &mut c.messages {
@@ -466,7 +518,7 @@ Mensagem de {}:
                         }
                         c.messages.push(msg("note", "O Claude não tem utilização disponível agora. A continuar no Antigravity."));
                     });
-                    run(true)
+                    run("antigravity")
                 }
                 r => r,
             }
@@ -544,6 +596,7 @@ Mensagem de {}:
                         c.carry = Some(summary);
                         c.session_id = None;
                         c.agy_conversation = None;
+                        c.codex_thread = None;
                         c.context_tokens = None;
                         c.messages.push(msg("divider", "Sessão nova a partir daqui: o resumo acima segue com a tua próxima mensagem."));
                     }
@@ -617,7 +670,7 @@ Mensagem de {}:
         });
     }
 
-    fn apply(&self, id: &str, ev: Ev, gemini: bool, engine: &str) {
+    fn apply(&self, id: &str, ev: Ev, engine: &str) {
         match &ev {
             Ev::Block(t) => {
                 let clean = brain::strip_marks(t);
@@ -629,13 +682,11 @@ Mensagem de {}:
             _ => {}
         }
         self.edit(id, false, |c| match ev {
-            Ev::Session(s) => {
-                if gemini {
-                    c.agy_conversation = Some(s);
-                } else {
-                    c.session_id = Some(s);
-                }
-            }
+            Ev::Session(s) => match engine {
+                "antigravity" => c.agy_conversation = Some(s),
+                "codex" => c.codex_thread = Some(s),
+                _ => c.session_id = Some(s),
+            },
             Ev::Delta(t, new_block) => match c.messages.last_mut() {
                 Some(m) if m.role == "assistant" && m.live => {
                     if new_block && !m.text.is_empty() {
@@ -675,7 +726,7 @@ pub fn is_agy(m: &Msg) -> bool {
 
 /// What the other engine answered since this engine's last reply, as text ("" when there is nothing new from it).
 fn catch_up(msgs: &[Msg], engine: &str) -> String {
-    let mine = |m: &Msg| m.role == "assistant" && (if engine == "claude" { !is_agy(m) } else { is_agy(m) });
+    let mine = |m: &Msg| m.role == "assistant" && msg_engine(m) == engine;
     let start = msgs.iter().rposition(mine).map(|i| i + 1).unwrap_or(0);
     let since = &msgs[start..];
     if !since.iter().any(|m| m.role == "assistant") {
@@ -689,8 +740,7 @@ fn catch_up(msgs: &[Msg], engine: &str) -> String {
             let who = match m.role.as_str() {
                 "user" => user.as_str(),
                 "inform" => "Jarvis (novidade do board)",
-                _ if is_agy(m) => "Antigravity",
-                _ => "Claude",
+                _ => engine_label(msg_engine(m)),
             };
             let t = if m.text.chars().count() > 1500 { format!("{}…", m.text.chars().take(1500).collect::<String>()) } else { m.text.clone() };
             format!("{who}: {t}")
@@ -704,14 +754,15 @@ impl Chat {
     pub fn engine_for(&self, mut e: Engine) -> Engine {
         match self.engine.as_deref() {
             Some("antigravity") => e.model = "gemini".into(),
-            Some("claude") if e.model == "gemini" => e.model = "auto".into(),
+            Some("codex") => e.model = "codex".into(),
+            Some("claude") if matches!(e.model.as_str(), "gemini" | "codex") => e.model = "auto".into(),
             _ => {}
         }
         if let Some(m) = &self.engine_model {
-            if e.model == "gemini" {
-                e.agy_model = m.clone();
-            } else {
-                e.claude_model = m.clone();
+            match e.model.as_str() {
+                "gemini" => e.agy_model = m.clone(),
+                "codex" => e.codex_model = m.clone(),
+                _ => e.claude_model = m.clone(),
             }
         }
         e

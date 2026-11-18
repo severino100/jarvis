@@ -7,14 +7,14 @@ O Jarvis não traz nada de nenhuma empresa. Cada equipa descreve o seu board, os
 ## O que faz
 
 - **Hoje**: o trabalho que tens e o que está livre para pegar, sprint, horas, agenda do dia, PRs, música e o que mudou no board.
-- **Conversas por item**: escolhes o motor (Claude Code ou Antigravity) e o modelo; a IA lê o item, encontra a causa no código e propõe o plano. Quando aprovas, prepara as tarefas, o worktree e um pacote de passagem; a implementação abre numa sessão nova do Claude Code ou noutra IA.
+- **Conversas por item**: escolhes o motor (Claude Code, Antigravity ou Codex) e o modelo; a IA lê o item, encontra a causa no código e propõe o plano. Quando aprovas, prepara as tarefas, o worktree e um pacote de passagem; a implementação abre numa sessão nova do Claude Code, no Codex ou noutra IA.
 - **Voz**: Ctrl+Alt+J, com o Whisper (ouvir) e a Piper (falar), no PC.
 - **Agenda** do Outlook, **PRs** do Azure Repos com comentários e "Corrigir", **tarefas** pessoais e do Notion, **limpeza** de worktrees, **horas** do sprint.
 
 ## Do que precisas
 
 - Windows 10/11.
-- [Claude Code](https://claude.com/claude-code) com a tua conta e/ou o Antigravity CLI (`agy`) com a tua conta Google.
+- Pelo menos um motor, com a tua conta: [Claude Code](https://claude.com/claude-code), o Antigravity CLI (`agy`, conta Google) ou o Codex (app Codex ou `npm i -g @openai/codex`, conta ChatGPT).
 - Git com acesso aos repositórios da tua equipa.
 - Para o board: Azure DevOps e um token pessoal (Work Items Read & Write, Code Read).
 - Para compilar: Rust estável e Visual Studio Build Tools 2022 com C++.

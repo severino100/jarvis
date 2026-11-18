@@ -87,7 +87,7 @@ fn main() -> eframe::Result {
         }
         return Ok(());
     }
-    // Dev aid: `jarvis --ask claude|gemini "texto"` runs one turn and prints the stream (no window).
+    // Dev aid: `jarvis --ask claude|gemini|codex "texto" [modelo] [sessão]` runs one turn and prints the stream (no window).
     let args: Vec<String> = std::env::args().collect();
     if args.get(1).map(String::as_str) == Some("--voice-test") {
         let t = std::time::Instant::now();
@@ -140,7 +140,7 @@ fn main() -> eframe::Result {
     // and checks the new session still knows what was said.
     if args.get(1).map(String::as_str) == Some("--compact-test") {
         let chats = chat::Chats::load(egui::Context::default());
-        let engine = chat::Engine { model: "claude".into(), claude_model: "haiku".into(), agy_model: "auto".into() };
+        let engine = chat::Engine { model: "claude".into(), claude_model: "haiku".into(), agy_model: "auto".into(), codex_model: "auto".into() };
         let id = chats.create(Some("teste de resumo (apagar)".into()), None, None);
         let wait = || {
             while chats.with(|cs| cs.iter().any(|c| c.id == id && c.busy)) {
@@ -169,7 +169,6 @@ fn main() -> eframe::Result {
         return Ok(());
     }
     if args.get(1).map(String::as_str) == Some("--ask") {
-        let gemini = args.get(2).map(String::as_str) == Some("gemini");
         let text = args.get(3).cloned().unwrap_or_else(|| "Responde só: ok".into());
         let stop = brain::StopHandle::default();
         let mut on = |ev: brain::Ev| match ev {
@@ -179,7 +178,11 @@ fn main() -> eframe::Result {
             _ => {}
         };
         let t = std::time::Instant::now();
-        let r = if gemini { brain::ask_gemini(&text, "", "", None, args.get(4).map(String::as_str), None, &stop, &mut on) } else { brain::ask_claude(&text, "", "sonnet", None, &stop, &mut on) };
+        let r = match args.get(2).map(String::as_str) {
+            Some("gemini") => brain::ask_gemini(&text, "", "", None, args.get(4).map(String::as_str), None, &stop, &mut on),
+            Some("codex") => brain::ask_codex(&text, "", "", args.get(5).map(String::as_str), args.get(4).map(String::as_str), &stop, &mut on),
+            _ => brain::ask_claude(&text, "", "sonnet", None, &stop, &mut on),
+        };
         println!("\n{:?} em {:.1}s", r, t.elapsed().as_secs_f32());
         return Ok(());
     }

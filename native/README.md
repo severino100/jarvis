@@ -11,7 +11,7 @@ JARVIS_SHOT_VIEW=chat JARVIS_SHOT_WINDOW=1 ...   # vista Chat com uma conversa d
 JARVIS_SHOT_VOICE=1 ...       # abre o painel da voz com uma troca de exemplo (sem microfone)
 target\debug\jarvis.exe --profile                    # o perfil, o pacote ativo, branches, worktrees e a persona preenchida
 target\debug\jarvis.exe --dump                       # lê o board uma vez e escreve um resumo
-target\debug\jarvis.exe --ask claude|gemini "texto"  # uma volta de conversa, sem janela
+target\debug\jarvis.exe --ask claude|gemini|codex "texto" [modelo]  # uma volta de conversa, sem janela
 target\debug\jarvis.exe --voice-test "texto"         # a Piper diz o texto para um WAV e o Whisper lê-o (nada toca)
 target\debug\jarvis.exe --mic-test                   # abre o microfone 1 s e diz o que ouviu
 ```
@@ -112,6 +112,10 @@ O resto que já poupa: sem subagentes, o Jarvis lê o item antes (a primeira vol
 `sound.rs`: som de arranque original, sintetizado, ou um ficheiro do utilizador (Definições → Som ao arrancar). `jarvis.exe --sound-wav <ficheiro>` grava o som original num WAV sem o tocar; uma cópia está em `../assets/arranque.wav`.
 
 `music.rs`: o que está a tocar no Windows (Spotify, Apple Music ou outro), pelos controlos de multimédia do sistema; sem contas nem login.
+
+## Codex
+
+`brain.rs` (`ask_codex`) corre `codex exec --json` com o pedido pela entrada padrão (com o item, o histórico e as regras passa do limite de 32 mil caracteres da linha de comandos do Windows) e retoma a conversa com `codex exec resume <thread>`. Usa o CLI da app Codex quando está instalada (`Get-AppxPackage OpenAI.Codex`, atualizado pela app) e, se não, o do npm. Corre na sandbox `workspace-write` com escrita só na pasta dos projetos e rede ligada, com `windows.sandbox="unelevated"` (a sandbox elevada precisa de uma consola e, com a consola escondida do Jarvis, os comandos nunca voltavam) e `notify=[]` (o aviso da app Codex não corre a cada resposta). Os modelos vêm de `codex debug models`; numa conta ChatGPT nem todos os da API são aceites. Implementar no Codex abre o Codex interativo numa consola própria, no worktree, já com o pedido.
 
 ## Antigravity e comandos
 

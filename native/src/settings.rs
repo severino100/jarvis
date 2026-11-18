@@ -19,7 +19,7 @@ pub struct Settings {
     /// A message from Jarvis in the item's conversation when something changes on the board or in a PR.
     pub inform_chat: bool,
     pub meeting_reminder: bool,
-    /// auto | claude | gemini
+    /// auto | claude | gemini | codex
     pub model: String,
     /// Claude Code model for the analysis in Jarvis: auto (Sonnet, Opus when asked) | sonnet | opus | haiku
     pub claude_model: String,
@@ -31,6 +31,8 @@ pub struct Settings {
     pub defaults_version: u32,
     /// Antigravity model id, or auto
     pub agy_model: String,
+    /// Codex model id, or auto (the model in the user's Codex settings)
+    pub codex_model: String,
     /// auto | 100 | 110 | 125
     pub ui_scale: String,
     /// Sound when Jarvis opens: original | file | off
@@ -54,6 +56,7 @@ impl Default for Settings {
             implement_model: "sonnet".into(),
             defaults_version: DEFAULTS_VERSION,
             agy_model: "auto".into(),
+            codex_model: "auto".into(),
             ui_scale: "auto".into(),
             startup_sound: "original".into(),
             startup_sound_file: String::new(),
