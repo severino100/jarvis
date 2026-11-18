@@ -170,7 +170,7 @@ fn header(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool, 
         ui.add(egui::Label::new(RichText::new(title).font(display(theme::size::SUBTITLE)).color(theme::BRIGHT)).truncate());
     });
     ui.horizontal(|ui| {
-        let (cost, tokens) = c.cost_today();
+        let (_, tokens) = c.cost_today();
         let mut info = Vec::new();
         if c.busy {
             // How long this reply has been running and how many steps it took, so a long run is visibly alive.
@@ -188,9 +188,6 @@ fn header(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool, 
         }
         if tokens > 0 {
             info.push(format!("hoje {} mil tokens", format!("{:.1}", tokens as f64 / 1000.0).replace('.', ",")));
-        }
-        if cost > 0.0 {
-            info.push(format!("{} USD", format!("{cost:.2}").replace('.', ",")));
         }
         if let Some(w) = &c.worktree {
             info.push(w.rsplit('\\').next().unwrap_or(w).to_owned());

@@ -11,6 +11,18 @@ O Jarvis não traz nada de nenhuma empresa. Cada equipa descreve o seu board, os
 - **Voz**: Ctrl+Alt+J, com o Whisper (ouvir) e a Piper (falar), no PC.
 - **Agenda** do Outlook, **PRs** do Azure Repos com comentários e "Corrigir", **tarefas** pessoais e do Notion, **limpeza** de worktrees, **horas** do sprint.
 
+## Só subscrições, nunca pagamento por utilização
+
+O Jarvis usa o Claude Code, o Antigravity e o Codex com a conta e a subscrição de quem o tem instalado, e recusa tudo o que custe dinheiro por utilização:
+
+- nenhum motor recebe chaves de API nem credenciais de cloud (`ANTHROPIC_*`, `OPENAI_*`, `GEMINI_API_KEY`, `AWS_*`, Vertex…);
+- o Claude Code só corre com o login da subscrição (Pro/Max): se estiver ligado por chave de API, ou se o limite do plano acabar e fosse continuar em utilização extra paga, o Jarvis para a resposta e diz porquê;
+- o Codex só corre com o login ChatGPT (`codex login status`, `forced_login_method="chatgpt"`), nunca com chave de API;
+- os custos em USD que os CLIs estimam não aparecem: numa subscrição não são dinheiro gasto;
+- quando o plano de um motor chega ao limite, a conversa continua no motor seguinte que tenhas instalado (Claude Code → Antigravity → Codex), com o que já foi dito, e fica lá até mudares (Definições → Motor das conversas novas).
+
+Compras feitas fora do Jarvis (créditos extra no ChatGPT ou na conta Google) dependem das definições de cada conta: deixa-as desligadas.
+
 ## Do que precisas
 
 - Windows 10/11.

@@ -47,6 +47,17 @@ fn projects_arg() -> String {
     crate::profile::projects_dir().to_string_lossy().into_owned()
 }
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Jarvis only uses subscriptions (Claude Pro/Max, ChatGPT, the Google account), never pay-per-use APIs: these
+/// variables would switch an engine to an API key or a cloud provider that bills per token, so no engine gets them.
+const PAID_ENV: &[&str] = &[
+    "CLAUDE", "ANTHROPIC", "OPENAI_", "CODEX_API_KEY", "AZURE_OPENAI", "GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENAI",
+    "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_CLOUD_PROJECT", "VERTEX", "AWS_",
+];
+
+/// The message when an engine would cost money beyond the subscription.
+fn paid_refusal(engine: &str, why: &str) -> String {
+    format!("Bloqueado: o {engine} {why}. O Jarvis só usa subscrições e nunca gasta dinheiro por utilização.")
+}
 /// Built-in tools the Jarvis analysis needs; the rest (web, notebooks, agents, MCP search) only add context.
 const LEAN_TOOLS: &str = "Read,Grep,Glob,Edit,Write,Bash,Skill,TodoWrite";
 
@@ -173,7 +184,7 @@ fn command(exe: &Path) -> Command {
     let mut c = Command::new(exe);
     for (k, _) in std::env::vars() {
         let up = k.to_uppercase();
-        if up.starts_with("CLAUDE") || up.starts_with("ANTHROPIC") {
+        if PAID_ENV.iter().any(|p| up.starts_with(p)) {
             c.env_remove(k);
         }
     }
@@ -242,7 +253,23 @@ pub fn ask_claude(text: &str, item_context: &str, model: &str, session: Option<&
     let mut result: Option<Value> = None;
     let (mut streamed, mut new_block, mut last_session) = (false, false, String::new());
     let mut context: Option<u64> = None;
+    let mut paid: Option<String> = None;
     let (err, code) = run(cmd, None, stop, |j| {
+        if paid.is_none() {
+            if j["type"] == "system" && j["subtype"] == "init" {
+                if let Some(src) = j["apiKeySource"].as_str().filter(|s| *s != "none") {
+                    paid = Some(paid_refusal("Claude Code", &format!("está ligado por chave de API ({src}), que é paga por utilização. Entra com a conta Pro/Max (claude, depois /login) e tira a chave")));
+                }
+            }
+            let rl = &j["rate_limit_info"];
+            if j["type"] == "rate_limit_event" && (rl["isUsingOverage"] == true || rl["status"] == "allowed_overage") {
+                paid = Some(paid_refusal("Claude Code", "chegou ao limite do plano e ia continuar em utilização extra paga. Espera que o limite renove ou usa outro motor"));
+            }
+            if paid.is_some() {
+                stop.stop();
+                return;
+            }
+        }
         if let Some(s) = j["session_id"].as_str() {
             if s != last_session {
                 last_session = s.to_owned();
@@ -300,6 +327,9 @@ pub fn ask_claude(text: &str, item_context: &str, model: &str, session: Option<&
             _ => {}
         }
     })?;
+    if let Some(p) = paid {
+        return Err(p);
+    }
     if stop.stopped() {
         return Ok(Outcome { stopped: true, ..Default::default() });
     }
@@ -489,6 +519,15 @@ pub fn codex_models() -> Vec<(String, String)> {
 /// later turns resume the Codex thread. Codex works in its sandbox with write access to the projects folder only.
 pub fn ask_codex(text: &str, history: &str, item_context: &str, thread: Option<&str>, model: Option<&str>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
     let exe = codex_exe().ok_or("O Codex não está instalado (app Codex ou npm i -g @openai/codex).")?;
+    let login = Command::new(&exe).args(["login", "status"]).creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
+    let login = format!("{}{}", String::from_utf8_lossy(&login.stdout), String::from_utf8_lossy(&login.stderr));
+    if !login.contains("ChatGPT") {
+        return Err(if login.to_lowercase().contains("api key") {
+            paid_refusal("Codex", "está ligado por chave de API, que é paga por utilização. Corre codex logout e depois codex login com a tua conta ChatGPT")
+        } else {
+            "O Codex não tem sessão iniciada. Abre a app Codex (ou corre codex login) e entra com a tua conta ChatGPT.".into()
+        });
+    }
     let mut parts: Vec<String> = Vec::new();
     if thread.is_none() {
         parts.push(format!("{}\n\n{}", persona(), codex_notes()));
@@ -517,7 +556,9 @@ pub fn ask_codex(text: &str, history: &str, item_context: &str, thread: Option<&
     cmd.args(["--json", "--skip-git-repo-check"])
         .args(["-c", "sandbox_mode=\"workspace-write\"", "-c", &roots, "-c", "sandbox_workspace_write.network_access=true"])
         // The user's notify hook (e.g. the Codex app's) would run after every Jarvis turn.
-        .args(["-c", "notify=[]", "-c", "model_reasoning_effort=\"medium\""]);
+        .args(["-c", "notify=[]", "-c", "model_reasoning_effort=\"medium\""])
+        // Only the ChatGPT subscription login, never an API key (pay-per-use).
+        .args(["-c", "forced_login_method=\"chatgpt\""]);
     if let Some(m) = model.filter(|m| !m.is_empty()) {
         cmd.args(["-m", m]);
     }
@@ -621,7 +662,7 @@ pub fn strip_marks(text: &str) -> String {
 /// Claude CLI errors that mean "no usage left right now"; anything else is a real error and stays with Claude.
 pub fn is_limit_error(msg: &str) -> bool {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)usage limit|limit reached|rate.?limit|\b429\b|quota|overloaded|out of (extra )?usage|credit balance|limite de utiliza").unwrap()).is_match(msg)
+    RE.get_or_init(|| Regex::new(r"(?i)usage limit|limit reached|rate.?limit|\b429\b|quota|overloaded|out of (extra )?usage|credit balance|limite de utiliza|limite do plano|hit your usage|usage cap|resource.?exhausted").unwrap()).is_match(msg)
 }
 
 fn is_session_id(s: &str) -> bool {

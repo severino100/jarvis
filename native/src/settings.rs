@@ -33,6 +33,8 @@ pub struct Settings {
     pub agy_model: String,
     /// Codex model id, or auto (the model in the user's Codex settings)
     pub codex_model: String,
+    /// When an engine's plan runs out, the conversation continues on another installed engine.
+    pub fallback: bool,
     /// auto | 100 | 110 | 125
     pub ui_scale: String,
     /// Sound when Jarvis opens: original | file | off
@@ -57,6 +59,7 @@ impl Default for Settings {
             defaults_version: DEFAULTS_VERSION,
             agy_model: "auto".into(),
             codex_model: "auto".into(),
+            fallback: true,
             ui_scale: "auto".into(),
             startup_sound: "original".into(),
             startup_sound_file: String::new(),

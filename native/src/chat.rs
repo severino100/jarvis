@@ -151,6 +151,9 @@ pub struct Engine {
     pub codex_model: String,
 }
 
+/// Every engine, in the order a conversation moves on to when a plan runs out.
+pub const ENGINES: [&str; 3] = ["claude", "antigravity", "codex"];
+
 /// The engine a settings value stands for: claude | antigravity | codex.
 pub fn engine_of(model_setting: &str) -> &'static str {
     match model_setting {
@@ -505,24 +508,30 @@ Mensagem de {}:
             }
         };
 
-        let result = if engine.model == "gemini" {
-            run("antigravity")
-        } else if engine.model == "codex" {
-            run("codex")
-        } else {
-            match run("claude") {
-                Err(e) if engine.model == "auto" && brain::is_limit_error(&e) && brain::gemini_installed() => {
-                    self.edit(id, false, |c| {
-                        for m in &mut c.messages {
-                            m.live = false;
-                        }
-                        c.messages.push(msg("note", "O Claude não tem utilização disponível agora. A continuar no Antigravity."));
-                    });
-                    run("antigravity")
+        // When an engine's plan runs out, the conversation moves on to the next engine installed here (each one on its
+        // own subscription) and stays there until it is switched back.
+        let first = engine_of(&engine.model);
+        let mut result = run(first);
+        if crate::settings::load().fallback && engine.model != "claude" {
+            let mut tried = vec![first];
+            while let Err(e) = &result {
+                if !brain::is_limit_error(e) {
+                    break;
                 }
-                r => r,
+                let Some(next) = ENGINES.into_iter().find(|x| !tried.contains(x) && engine_installed(x)) else { break };
+                let from = *tried.last().unwrap();
+                tried.push(next);
+                self.edit(id, true, |c| {
+                    for m in &mut c.messages {
+                        m.live = false;
+                    }
+                    c.engine = Some(next.to_owned());
+                    c.engine_model = None;
+                    c.messages.push(msg("note", &format!("O plano do {} chegou ao limite. A continuar no {} (muda de motor por cima da caixa de escrita quando quiseres voltar).", engine_label(from), engine_label(next))));
+                });
+                result = run(next);
             }
-        };
+        }
 
         let mut error = None;
         let mut stopped = false;
@@ -537,9 +546,6 @@ Mensagem de {}:
                     parts.push(format!("{} mil tokens", format!("{:.1}", r.tokens as f64 / 1000.0).replace('.', ",")));
                 } else if r.tokens > 0 {
                     parts.push(format!("{} tokens", r.tokens));
-                }
-                if let Some(c) = r.cost {
-                    parts.push(format!("{} USD", format!("{c:.2}").replace('.', ",")));
                 }
                 if let Some(m) = &r.model {
                     parts.push(m.clone());
@@ -665,7 +671,7 @@ Mensagem de {}:
                 },
                 msg("user", "Sim, avança."),
                 Msg { worktree: Some(wt.clone()), ..msg("implement", "Está tudo preparado. Onde queres implementar?") },
-                Msg { cost: Some(0.42), tokens: Some(48200), ..msg("note", "Concluído em 48 s · 48,2 mil tokens · 0,42 USD · claude-sonnet") },
+                Msg { cost: Some(0.42), tokens: Some(48200), ..msg("note", "Concluído em 48 s · 48,2 mil tokens · claude-sonnet") },
             ];
         });
     }
