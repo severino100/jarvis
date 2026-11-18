@@ -7,7 +7,6 @@ use crate::{
     azdo::{Dashboard, Item},
     board::Board,
     chat::{self, Chats, VoiceMsg},
-    settings::jarvis_dir,
 };
 use eframe::egui;
 use rodio::{microphone::MicrophoneBuilder, Source};
@@ -62,14 +61,14 @@ pub struct Voice {
 }
 
 fn whisper() -> Option<(PathBuf, PathBuf)> {
-    let v = jarvis_dir().join("vendor");
+    let v = crate::settings::vendor_dir();
     let exe = [v.join("whisper").join("Release").join("whisper-cli.exe"), v.join("whisper").join("whisper-cli.exe")].into_iter().find(|p| p.exists())?;
     let model = v.join("models").join("ggml-small.bin");
     model.exists().then_some((exe, model))
 }
 
 fn piper() -> Option<(PathBuf, PathBuf)> {
-    let v = jarvis_dir().join("vendor");
+    let v = crate::settings::vendor_dir();
     let (exe, model) = (v.join("piper").join("piper.exe"), v.join("voices").join("pt_PT-tugao-medium.onnx"));
     (exe.exists() && model.exists()).then_some((exe, model))
 }
@@ -112,7 +111,7 @@ impl Voice {
             return;
         }
         if whisper().is_none() {
-            crate::notify::notify("Voz indisponível", "Falta o Whisper em vendor/ (whisper-cli.exe e ggml-small.bin).", AppEvent::Show);
+            crate::notify::notify("Voz indisponível", "Falta o Whisper: corre o instalador do Jarvis (descarrega a voz).", AppEvent::Show);
             return;
         }
         self.stop.store(false, Ordering::SeqCst);
@@ -431,7 +430,7 @@ fn resample(x: &[f32], from: u32, to: u32) -> Vec<f32> {
 const PROMPT: &str = "Jarvis, o que tenho para fazer? Pega no 8125. Abre o 8420. O que disse o QA? O que há no Refined? Refined, Planned, In Progress, Code Review, To Test, sprint, horas, Work Done.";
 
 fn transcribe(audio: &[f32]) -> Result<String, String> {
-    let (exe, model) = whisper().ok_or("O Whisper não está instalado em vendor/.")?;
+    let (exe, model) = whisper().ok_or("O Whisper não está instalado: corre o instalador do Jarvis.")?;
     let file = std::env::temp_dir().join(format!("jarvis-heard-{}.wav", std::process::id()));
     {
         let spec = hound::WavSpec { channels: 1, sample_rate: RATE, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
@@ -734,7 +733,7 @@ fn understand_inner(text: &str, d: Option<&Dashboard>, ctx: &mut Convo) -> Reply
 
 /// Dev aid (`jarvis --voice-test "texto"`): Piper writes the text to a WAV, Whisper reads it back. Nothing is played.
 pub fn self_test(text: &str) -> Result<String, String> {
-    let (exe, model) = piper().ok_or("Falta a Piper em vendor/.")?;
+    let (exe, model) = piper().ok_or("A Piper não está instalada: corre o instalador do Jarvis.")?;
     let out = std::env::temp_dir().join("jarvis-selftest.wav");
     let mut child = Command::new(exe).arg("-m").arg(model).arg("-f").arg(&out).stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(NO_WINDOW).spawn().map_err(|e| e.to_string())?;
     {

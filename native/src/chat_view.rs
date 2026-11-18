@@ -179,14 +179,14 @@ fn header(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool, 
         ui.add(egui::Label::new(RichText::new(title).font(display(theme::size::SUBTITLE)).color(theme::BRIGHT)).truncate());
     });
     ui.horizontal(|ui| {
-        let (cost, tokens) = c.cost_today();
+        let (_, tokens) = c.cost_today();
         let mut info = Vec::new();
         if c.busy {
             // How long this reply has been running and how many steps it took, so a long run is visibly alive.
             let start = c.messages.iter().rposition(|m| m.role == "user").unwrap_or(0);
             let steps: usize = c.messages[start..].iter().map(|m| m.tools.len()).sum();
             let secs = c.messages.get(start).and_then(|m| crate::ui_kit::parse(&m.at)).map(|t| (chrono::Local::now() - t).num_seconds().max(0)).unwrap_or(0);
-            let engine = if c.messages[start..].iter().any(crate::chat::is_agy) || c.engine.as_deref() == Some("antigravity") { "Antigravity" } else { "Claude Code" };
+            let engine = crate::chat::engine_label(c.engine.as_deref().unwrap_or_else(|| crate::chat::engine_of(&crate::chat::engine().model)));
             info.push(format!("{engine} a trabalhar há {}:{:02} · {steps} passo{}", secs / 60, secs % 60, if steps == 1 { "" } else { "s" }));
         }
         if c.handed_off {
@@ -197,9 +197,6 @@ fn header(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool, 
         }
         if tokens > 0 {
             info.push(format!("hoje {} mil tokens", format!("{:.1}", tokens as f64 / 1000.0).replace('.', ",")));
-        }
-        if cost > 0.0 {
-            info.push(format!("{} USD", format!("{cost:.2}").replace('.', ",")));
         }
         if let Some(w) = &c.worktree {
             info.push(w.rsplit('\\').next().unwrap_or(w).to_owned());
@@ -249,7 +246,7 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
             });
         }
         "assistant" => {
-            who(ui, if crate::chat::is_agy(m) { "JARVIS · ANTIGRAVITY" } else { "JARVIS · CLAUDE CODE" }, acc.main);
+            who(ui, &format!("JARVIS · {}", crate::chat::engine_label(crate::chat::msg_engine(m)).to_uppercase()), acc.main);
             // The marks for Jarvis ([[LEMBRAR: …]] and the others) are not for the person, also while streaming.
             if m.live {
                 let t = crate::brain::strip_marks(&m.text);
@@ -327,6 +324,7 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
                         let name = match t {
                             "claude" => "no Claude Code",
                             "antigravity" => "no Antigravity",
+                            "codex" => "no Codex",
                             _ => "noutra IA",
                         };
                         ui.label(RichText::new(format!("A implementação seguiu {name}.")).color(theme::GREEN));
@@ -338,6 +336,9 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
                             }
                             if button(ui, "Antigravity", false, acc).on_hover_text("Abre o worktree no Antigravity e copia o pedido").clicked() {
                                 acts.push(Action::Implement(c.id.clone(), "antigravity"));
+                            }
+                            if crate::brain::codex_installed() && button(ui, "Codex", false, acc).on_hover_text("Abre o Codex num terminal no worktree, já com o pedido").clicked() {
+                                acts.push(Action::Implement(c.id.clone(), "codex"));
                             }
                             if button(ui, "Outra IA", false, acc).on_hover_text("Abre a pasta .jarvis e copia o pedido").clicked() {
                                 acts.push(Action::Implement(c.id.clone(), "other"));
@@ -367,18 +368,24 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
     }
 }
 
-/// Who answers in this conversation (Claude Code or Antigravity) and with which model. Switching mid-conversation
-/// is fine: the other engine gets what was said since as text.
+/// The default model of an engine in Definições.
+pub fn default_model(engine: &str) -> String {
+    let d = crate::chat::engine();
+    let m = match engine {
+        "antigravity" => d.agy_model,
+        "codex" => d.codex_model,
+        _ => d.claude_model,
+    };
+    if m.is_empty() { "auto".into() } else { m }
+}
+
+/// Who answers in this conversation (Claude Code, Antigravity or Codex) and with which model. Switching
+/// mid-conversation is fine: the other engine gets what was said since as text.
 fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
-    let defaults = crate::chat::engine();
-    let default_engine = if defaults.model == "gemini" { "antigravity" } else { "claude" };
+    let default_engine = crate::chat::engine_of(&crate::chat::engine().model);
     let engine = c.engine.clone().unwrap_or_else(|| default_engine.to_owned());
-    let agy = engine == "antigravity";
-    let models = model_options(agy);
-    let model = c.engine_model.clone().unwrap_or_else(|| {
-        let d = if engine == default_engine { if agy { defaults.agy_model.clone() } else { defaults.claude_model.clone() } } else { String::new() };
-        if d.is_empty() { "auto".into() } else { d }
-    });
+    let models = model_options(&engine);
+    let model = c.engine_model.clone().unwrap_or_else(|| if engine == default_engine { default_model(&engine) } else { "auto".into() });
     let model_label = models.iter().find(|(id, _)| *id == model).map(|(_, l)| l.clone()).unwrap_or_else(|| model.clone());
     ui.add_enabled_ui(!c.busy, |ui| {
         ui.horizontal(|ui| {
@@ -398,10 +405,11 @@ fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
             }
             ui.label(RichText::new("MOTOR").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
             let mut pick = engine.clone();
-            egui::ComboBox::from_id_salt(("engine", &c.id)).selected_text(if agy { "Antigravity" } else { "Claude Code" }).width(150.0).show_ui(ui, |ui| {
-                ui.selectable_value(&mut pick, "claude".to_owned(), "Claude Code");
-                if crate::brain::gemini_installed() {
-                    ui.selectable_value(&mut pick, "antigravity".to_owned(), "Antigravity");
+            egui::ComboBox::from_id_salt(("engine", &c.id)).selected_text(crate::chat::engine_label(&engine)).width(150.0).show_ui(ui, |ui| {
+                for e in ["claude", "antigravity", "codex"] {
+                    if crate::chat::engine_installed(e) {
+                        ui.selectable_value(&mut pick, e.to_owned(), crate::chat::engine_label(e));
+                    }
                 }
             });
             if pick != engine {
@@ -469,9 +477,11 @@ fn typing(ui: &mut Ui, acc: Accent) {
 }
 
 /// Models offered for an engine: (id, label), "auto" first.
-pub fn model_options(agy: bool) -> Vec<(String, String)> {
-    if agy {
+pub fn model_options(engine: &str) -> Vec<(String, String)> {
+    if engine == "antigravity" {
         std::iter::once(("auto".to_owned(), "Predefinido do Antigravity".to_owned())).chain(crate::brain::agy_models()).collect()
+    } else if engine == "codex" {
+        std::iter::once(("auto".to_owned(), "Predefinido do Codex".to_owned())).chain(crate::brain::codex_models()).collect()
     } else {
         std::iter::once(("auto".to_owned(), "Automático (Sonnet; Opus se pedires)".to_owned()))
             .chain(crate::brain::CLAUDE_MODELS.iter().map(|(a, b)| (a.to_string(), b.to_string())))

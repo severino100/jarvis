@@ -79,7 +79,7 @@ pub fn monday(d: NaiveDate) -> NaiveDate {
 }
 
 fn load(from: NaiveDate) -> Week {
-    let script = crate::settings::jarvis_dir().join("scripts").join("calendar.ps1");
+    let script = crate::settings::resources_dir().join("calendar.ps1");
     let out = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(script)

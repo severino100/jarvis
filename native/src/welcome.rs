@@ -19,8 +19,8 @@ pub struct Welcome {
     step: usize,
     url: String,
     instructions: String,
-    /// Claude Code and Antigravity on this PC, checked when the step opens and on "Verificar outra vez".
-    engines: Option<(bool, bool)>,
+    /// Claude Code, Antigravity and Codex on this PC, checked when the step opens and on "Verificar outra vez".
+    engines: Option<(bool, bool, bool)>,
 }
 
 impl Welcome {
@@ -105,8 +105,8 @@ pub fn view(ui: &mut Ui, w: &mut Welcome, acc: Accent) -> bool {
             }
         }
         2 => {
-            title(ui, "A tua conta de IA", "O Jarvis não tem IA própria: usa a tua subscrição do Claude (Claude Code) ou a tua conta Google (Antigravity). Não há chaves nem custos à parte.");
-            let (claude, agy) = *w.engines.get_or_insert_with(|| (crate::brain::claude_installed(), crate::brain::gemini_installed()));
+            title(ui, "A tua conta de IA", "O Jarvis não tem IA própria: usa a tua subscrição do Claude (Claude Code), a tua conta Google (Antigravity) ou a tua conta ChatGPT (Codex). Basta um. Não há chaves nem pagamentos por utilização.");
+            let (claude, agy, codex) = *w.engines.get_or_insert_with(|| (crate::brain::claude_installed(), crate::brain::gemini_installed(), crate::brain::codex_installed()));
             label(ui, "Claude Code");
             status(ui, claude, "Instalado neste PC.", "Não o encontrei neste PC.");
             if !claude {
@@ -118,18 +118,37 @@ pub fn view(ui: &mut Ui, w: &mut Welcome, acc: Accent) -> bool {
             ui.add_space(10.0);
             label(ui, "Antigravity");
             status(ui, agy, "Instalado neste PC.", "Não está instalado (é opcional).");
-            if !agy {
-                ui.label(RichText::new("Com o Antigravity, quando o Claude fica sem utilização a conversa continua na tua conta Google.").small().color(theme::MUTED));
+            ui.add_space(10.0);
+            label(ui, "Codex");
+            status(ui, codex, "Instalado neste PC.", "Não está instalado (é opcional).");
+            if !codex {
+                ui.label(RichText::new("Com a app Codex instalada e a tua conta ChatGPT, o Codex passa a ser outro motor.").small().color(theme::MUTED));
+            }
+            if !(claude || agy || codex) {
+                ui.add_space(6.0);
+                ui_kit::hint(ui, "Sem nenhum destes o Jarvis não consegue responder. Instala um e carrega em Verificar outra vez.", true, acc);
             }
             ui.add_space(10.0);
             label(ui, "Quem responde nas conversas");
+            if s.model == "claude" {
+                s.model = "auto".into();
+                s.fallback = false;
+            }
             ui.horizontal_wrapped(|ui| {
-                for (v, l) in [("auto", "Claude Code"), ("claude", "Só Claude Code"), ("gemini", "Antigravity")] {
+                let mut opts = vec![("auto", "Claude Code")];
+                if agy {
+                    opts.push(("gemini", "Antigravity"));
+                }
+                if codex {
+                    opts.push(("codex", "Codex"));
+                }
+                for (v, l) in opts {
                     if button(ui, l, s.model == v, acc).clicked() {
                         s.model = v.into();
                     }
                 }
             });
+            ui.checkbox(&mut s.fallback, "Quando o plano de um motor acaba, continuar a conversa noutro motor instalado");
             ui.add_space(10.0);
             label(ui, "Email e agenda");
             ui.label(RichText::new("A agenda vem do Outlook deste PC, sem nada para ligar. Se não usas o Outlook, desliga a agenda no passo do Hoje.").color(theme::MUTED));
@@ -208,8 +227,11 @@ pub fn view(ui: &mut Ui, w: &mut Welcome, acc: Accent) -> bool {
     if p != before {
         profile::update(|x| *x = p);
     }
-    if s.model != s_before.model {
-        settings::update(|x| x.model = s.model);
+    if s.model != s_before.model || s.fallback != s_before.fallback {
+        settings::update(|x| {
+            x.model = s.model;
+            x.fallback = s.fallback;
+        });
     }
 
     ui.add_space(14.0);

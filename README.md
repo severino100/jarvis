@@ -7,26 +7,38 @@ O Jarvis não traz nada de nenhuma empresa. Cada equipa descreve o seu board, os
 ## O que faz
 
 - **Hoje**: o trabalho que tens e o que está livre para pegar, sprint, horas, agenda do dia, PRs, música e o que mudou no board.
-- **Conversas por item**: escolhes o motor (Claude Code ou Antigravity) e o modelo; a IA lê o item, encontra a causa no código e propõe o plano. Quando aprovas, prepara as tarefas, o worktree e um pacote de passagem; a implementação abre numa sessão nova do Claude Code ou noutra IA.
+- **Conversas por item**: escolhes o motor (Claude Code, Antigravity ou Codex) e o modelo; a IA lê o item, encontra a causa no código e propõe o plano. Quando aprovas, prepara as tarefas, o worktree e um pacote de passagem; a implementação abre numa sessão nova do Claude Code, no Codex ou noutra IA.
 - **Voz**: Ctrl+Alt+J, com o Whisper (ouvir) e a Piper (falar), no PC.
 - **Agenda** do Outlook, **PRs** do Azure Repos com comentários e "Corrigir", **tarefas** pessoais e do Notion, **limpeza** de worktrees, **horas** do sprint.
+
+## Só subscrições, nunca pagamento por utilização
+
+O Jarvis usa o Claude Code, o Antigravity e o Codex com a conta e a subscrição de quem o tem instalado, e recusa tudo o que custe dinheiro por utilização:
+
+- nenhum motor recebe chaves de API nem credenciais de cloud (`ANTHROPIC_*`, `OPENAI_*`, `GEMINI_API_KEY`, `AWS_*`, Vertex…);
+- o Claude Code só corre com o login da subscrição (Pro/Max): se estiver ligado por chave de API, ou se o limite do plano acabar e fosse continuar em utilização extra paga, o Jarvis para a resposta e diz porquê;
+- o Codex só corre com o login ChatGPT (`codex login status`, `forced_login_method="chatgpt"`), nunca com chave de API;
+- os custos em USD que os CLIs estimam não aparecem: numa subscrição não são dinheiro gasto;
+- quando o plano de um motor chega ao limite, a conversa continua no motor seguinte que tenhas instalado (Claude Code → Antigravity → Codex), com o que já foi dito, e fica lá até mudares (Definições → Motor das conversas novas).
+
+Compras feitas fora do Jarvis (créditos extra no ChatGPT ou na conta Google) dependem das definições de cada conta: deixa-as desligadas.
 
 ## Do que precisas
 
 - Windows 10/11.
-- [Claude Code](https://claude.com/claude-code) com a tua conta e/ou o Antigravity CLI (`agy`) com a tua conta Google.
+- Pelo menos um motor, com a tua conta: [Claude Code](https://claude.com/claude-code), o Antigravity CLI (`agy`, conta Google) ou o Codex (app Codex ou `npm i -g @openai/codex`, conta ChatGPT).
 - Git com acesso aos repositórios da tua equipa.
 - Para o board: Azure DevOps e um token pessoal (Work Items Read & Write, Code Read).
-- Para compilar: Rust estável e Visual Studio Build Tools 2022 com C++.
-- Para a voz: o Whisper e a Piper em `vendor/` (não vêm no repositório).
 
-## Começar
+## Instalar
+
+Numa janela do PowerShell:
 
 ```powershell
-cd native
-cargo build --release
-powershell -ExecutionPolicy Bypass -File ..\scripts\install-native.ps1
+irm https://github.com/severino100/jarvis/releases/latest/download/install.ps1 | iex
 ```
+
+O instalador descarrega o `jarvis.exe` do último release para `%LOCALAPPDATA%\Programs\Jarvis`, a voz (Whisper e Piper com a voz pt-PT, ~600 MB, das fontes oficiais) para `%LOCALAPPDATA%\Jarvis\vendor`, cria os atalhos e liga o arranque com o Windows. Sem voz: descarrega o `install.ps1` e corre-o com `-SemVoz`. Para atualizar, corre-o outra vez (a voz já descarregada não volta a descer).
 
 Depois, no Jarvis, **Definições → Perfil e equipa**:
 
@@ -42,4 +54,6 @@ Um pacote é uma pasta com um `jarvis.toml` (board, repositórios, convenção d
 
 ## Desenvolvimento
 
-O código está em [`native/`](native/) e a documentação técnica em [native/README.md](native/README.md). As regras da conversa estão em [`docs/`](docs/).
+O código está em [`native/`](native/) e a documentação técnica em [native/README.md](native/README.md). As regras da conversa estão em [`docs/`](docs/). Para compilar: Rust estável e Visual Studio Build Tools 2022 com C++; `cargo build --release` em `native/` e `scripts\install-native.ps1` instala o que compilaste no mesmo sítio que o instalador.
+
+Releases: uma tag `v*` (ou "Run workflow" em Actions → release) compila no Windows e publica o `jarvis.exe` e o `install.ps1` num release do GitHub.

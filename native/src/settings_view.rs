@@ -266,8 +266,22 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
     });
     ui.add_space(10.0);
     ui_kit::hud_panel(ui, acc, false, |ui| {
-        row(ui, "Motor das conversas novas", "Cada conversa pode trocar de motor e de modelo por cima da caixa de escrita. Com \"Claude Code\", quando o Claude fica sem utilização a conversa continua no Antigravity (a tua conta Google).", |ui| {
-            chips(ui, &mut s.model, &[("auto".into(), "Claude Code"), ("claude".into(), "Só Claude Code"), ("gemini".into(), "Antigravity")], acc);
+        row(ui, "Motor das conversas novas", "Cada conversa pode trocar de motor e de modelo por cima da caixa de escrita. Cada motor usa a tua subscrição dele; quando o plano de um acaba, a conversa pode seguir noutro (Claude Code → Antigravity → Codex, só os instalados) e fica lá até mudares.", |ui| {
+            // "Só Claude Code" was the old way to turn the fallback off.
+            if s.model == "claude" {
+                s.model = "auto".into();
+                s.fallback = false;
+            }
+            let mut opts: Vec<(String, &str)> = vec![("auto".into(), "Claude Code")];
+            if crate::brain::gemini_installed() {
+                opts.push(("gemini".into(), "Antigravity"));
+            }
+            if crate::brain::codex_installed() {
+                opts.push(("codex".into(), "Codex"));
+            }
+            chips(ui, &mut s.model, &opts, acc);
+            ui.end_row();
+            ui.checkbox(&mut s.fallback, "Quando o plano de um motor acaba, continuar a conversa noutro motor instalado");
         });
         row(ui, "Claude Code na análise", "O modelo das conversas do Jarvis (análise e preparação). Automático usa o Sonnet e o Opus quando pedes (\"pensa a fundo\"). Cada conversa pode mudar por cima da caixa de escrita.", |ui| {
             chips(ui, &mut s.claude_model, &[("opus".into(), "Opus"), ("sonnet".into(), "Sonnet"), ("auto".into(), "Automático"), ("haiku".into(), "Haiku")], acc);
@@ -285,16 +299,26 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
         } else {
             ui.label(RichText::new("Antigravity indisponível: falta o Antigravity CLI (agy).").small().color(theme::FAINT));
         }
+        if crate::brain::codex_installed() {
+            row(ui, "Modelo do Codex", "Os modelos que a tua conta ChatGPT tem no Codex. Predefinido usa o do teu config.toml do Codex.", |ui| {
+                let mut opts: Vec<(String, String)> = vec![("auto".into(), "Predefinido".into())];
+                opts.extend(crate::brain::codex_models());
+                let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
+                chips(ui, &mut s.codex_model, &refs, acc);
+            });
+        } else {
+            ui.label(RichText::new("Codex indisponível: instala a app Codex ou o Codex CLI.").small().color(theme::FAINT));
+        }
     });
     ui.add_space(10.0);
     ui_kit::hud_panel(ui, acc, false, |ui| {
         row(ui, "Voz", "Ctrl+Alt+J ou \"Falar com o Jarvis\" no ícone da bandeja. Diz \"obrigado\" para terminar.", |ui| {
             let (w, p) = voice_ready;
-            ui.label(RichText::new(if w { "Whisper pronto" } else { "Falta o Whisper em vendor/" }).color(if w { theme::GREEN } else { theme::AMBER }));
-            ui.label(RichText::new(if p { "Voz Piper pronta" } else { "Falta a Piper em vendor/" }).color(if p { theme::GREEN } else { theme::AMBER }));
+            ui.label(RichText::new(if w { "Whisper pronto" } else { "Falta o Whisper (instalador)" }).color(if w { theme::GREEN } else { theme::AMBER }));
+            ui.label(RichText::new(if p { "Voz Piper pronta" } else { "Falta a Piper (instalador)" }).color(if p { theme::GREEN } else { theme::AMBER }));
         });
     });
-    if s.accent != before.accent || s.ui_scale != before.ui_scale || s.poll_minutes != before.poll_minutes || s.notify != before.notify || s.inform_chat != before.inform_chat || s.meeting_reminder != before.meeting_reminder || s.model != before.model || s.claude_model != before.claude_model || s.agy_model != before.agy_model || s.implement_model != before.implement_model || s.startup_sound != before.startup_sound || s.startup_sound_file != before.startup_sound_file || s.music_links != before.music_links {
+    if s.accent != before.accent || s.ui_scale != before.ui_scale || s.poll_minutes != before.poll_minutes || s.notify != before.notify || s.inform_chat != before.inform_chat || s.meeting_reminder != before.meeting_reminder || s.model != before.model || s.claude_model != before.claude_model || s.agy_model != before.agy_model || s.codex_model != before.codex_model || s.fallback != before.fallback || s.implement_model != before.implement_model || s.startup_sound != before.startup_sound || s.startup_sound_file != before.startup_sound_file || s.music_links != before.music_links {
         settings::update(|x| *x = s);
     }
     look
