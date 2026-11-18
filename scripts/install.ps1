@@ -1,0 +1,121 @@
+# Instala o Jarvis para este utilizador do Windows, sem compilar nada:
+#   irm https://github.com/severino100/jarvis/releases/latest/download/install.ps1 | iex
+# ou, com o ficheiro descarregado:
+#   powershell -ExecutionPolicy Bypass -File install.ps1 [-SemVoz] [-Versao v0.2.0] [-Exe <jarvis.exe local>]
+#
+# - descarrega o jarvis.exe do release (o mais recente, ou -Versao) para %LOCALAPPDATA%\Programs\Jarvis;
+# - descarrega a voz (Whisper para ouvir, Piper com a voz pt-PT para falar, ~600 MB) das fontes oficiais para
+#   %LOCALAPPDATA%\Jarvis\vendor, a não ser com -SemVoz (o Jarvis funciona sem voz);
+# - cria os atalhos "Jarvis" no menu Iniciar e no Ambiente de Trabalho, liga o arranque com o Windows e abre-o.
+# Não pede contas nem chaves: cada motor de IA (Claude Code, Antigravity, Codex) usa a sessão que já tens nele.
+param([switch]$SemVoz, [string]$Versao = '', [string]$Exe = '')
+# PowerShell names are case-insensitive: $Exe is read here, before $exe below reuses the name for the destination.
+$localExe = $Exe
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$repo = 'severino100/jarvis'
+$appDir = Join-Path $env:LOCALAPPDATA 'Programs\Jarvis'
+$exe = Join-Path $appDir 'jarvis.exe'
+$vendor = Join-Path $env:LOCALAPPDATA 'Jarvis\vendor'
+$appId = 'jarvis.desktop'
+$runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+
+# Fontes oficiais da voz (versões fixas, as que o Jarvis testou).
+$whisperZip = 'https://github.com/ggml-org/whisper.cpp/releases/download/b5454/whisper-bin-x64.zip'
+$whisperModel = 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin'
+$piperZip = 'https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_windows_amd64.zip'
+$voiceBase = 'https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_PT/tug%C3%A3o/medium/pt_PT-tug%C3%A3o-medium'
+
+function Get-File($url, $dest) {
+  $tmp = "$dest.partial"
+  Invoke-WebRequest -Uri $url -OutFile $tmp -UseBasicParsing
+  Move-Item $tmp $dest -Force
+}
+
+function Step($text) { Write-Host "-> $text" -ForegroundColor Cyan }
+
+# 1. O programa
+Step $(if ($localExe) { 'A copiar o Jarvis…' } else { 'A descarregar o Jarvis…' })
+New-Item -ItemType Directory -Force $appDir | Out-Null
+$release = if ($Versao) { "https://github.com/$repo/releases/download/$Versao" } else { "https://github.com/$repo/releases/latest/download" }
+# Fecha o Jarvis que estiver aberto (o Windows não deixa substituir o exe enquanto corre).
+for ($i = 0; $i -lt 30; $i++) {
+  $left = Get-Process jarvis -ErrorAction SilentlyContinue
+  if (-not $left) { break }
+  $left | Stop-Process -Force -ErrorAction SilentlyContinue
+  Start-Sleep -Milliseconds 500
+}
+Start-Sleep -Milliseconds 500
+if ($localExe) { Copy-Item $localExe $exe -Force } else { Get-File "$release/jarvis.exe" $exe }
+
+# 2. A voz
+if (-not $SemVoz) {
+  New-Item -ItemType Directory -Force (Join-Path $vendor 'models'), (Join-Path $vendor 'voices') | Out-Null
+  $tmpDir = Join-Path $env:TEMP 'jarvis-instalar'
+  New-Item -ItemType Directory -Force $tmpDir | Out-Null
+  if (-not (Test-Path (Join-Path $vendor 'whisper\Release\whisper-cli.exe'))) {
+    Step 'A descarregar o Whisper (reconhecimento de voz)…'
+    Get-File $whisperZip (Join-Path $tmpDir 'whisper.zip')
+    Expand-Archive (Join-Path $tmpDir 'whisper.zip') (Join-Path $vendor 'whisper') -Force
+  }
+  if (-not (Test-Path (Join-Path $vendor 'models\ggml-small.bin'))) {
+    Step 'A descarregar o modelo do Whisper (~460 MB, demora uns minutos)…'
+    Get-File $whisperModel (Join-Path $vendor 'models\ggml-small.bin')
+  }
+  if (-not (Test-Path (Join-Path $vendor 'piper\piper.exe'))) {
+    Step 'A descarregar a Piper (voz)…'
+    Get-File $piperZip (Join-Path $tmpDir 'piper.zip')
+    Expand-Archive (Join-Path $tmpDir 'piper.zip') $vendor -Force
+  }
+  if (-not (Test-Path (Join-Path $vendor 'voices\pt_PT-tugao-medium.onnx'))) {
+    Step 'A descarregar a voz portuguesa…'
+    Get-File "$voiceBase.onnx" (Join-Path $vendor 'voices\pt_PT-tugao-medium.onnx')
+    Get-File "$voiceBase.onnx.json" (Join-Path $vendor 'voices\pt_PT-tugao-medium.onnx.json')
+  }
+  Remove-Item $tmpDir -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# 3. Atalhos (com o AppUserModelID das notificações) e arranque com o Windows
+Step 'A criar os atalhos…'
+Add-Type @'
+using System; using System.Runtime.InteropServices;
+public static class JarvisAumid {
+  [StructLayout(LayoutKind.Sequential, Pack = 4)] public struct PROPERTYKEY { public Guid fmtid; public uint pid; }
+  [StructLayout(LayoutKind.Explicit, Size = 24)] public struct PROPVARIANT { [FieldOffset(0)] public ushort vt; [FieldOffset(8)] public IntPtr p; }
+  [ComImport, Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IPropertyStore {
+    int GetCount(out uint c); int GetAt(uint i, out PROPERTYKEY k); int GetValue(ref PROPERTYKEY k, out PROPVARIANT v);
+    int SetValue(ref PROPERTYKEY k, ref PROPVARIANT v); int Commit();
+  }
+  [DllImport("shell32.dll", CharSet = CharSet.Unicode, PreserveSig = false)]
+  static extern void SHGetPropertyStoreFromParsingName(string path, IntPtr bc, int flags, ref Guid iid, [MarshalAs(UnmanagedType.Interface)] out IPropertyStore store);
+  public static void Set(string lnk, string id) {
+    Guid iid = new Guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99");
+    IPropertyStore store;
+    SHGetPropertyStoreFromParsingName(lnk, IntPtr.Zero, 2, ref iid, out store);
+    PROPERTYKEY key = new PROPERTYKEY { fmtid = new Guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), pid = 5 };
+    PROPVARIANT v = new PROPVARIANT { vt = 31, p = Marshal.StringToCoTaskMemUni(id) };
+    try { Marshal.ThrowExceptionForHR(store.SetValue(ref key, ref v)); Marshal.ThrowExceptionForHR(store.Commit()); }
+    finally { Marshal.FreeCoTaskMem(v.p); Marshal.ReleaseComObject(store); }
+  }
+}
+'@
+$shell = New-Object -ComObject WScript.Shell
+foreach ($lnk in @((Join-Path ([Environment]::GetFolderPath('Programs')) 'Jarvis.lnk'), (Join-Path ([Environment]::GetFolderPath('Desktop')) 'Jarvis.lnk'))) {
+  $s = $shell.CreateShortcut($lnk)
+  $s.TargetPath = $exe
+  $s.WorkingDirectory = $appDir
+  $s.IconLocation = "$exe,0"
+  $s.Description = 'Jarvis — o teu assistente'
+  $s.Save()
+  [JarvisAumid]::Set($lnk, $appId)
+}
+Set-ItemProperty $runKey -Name $appId -Value "`"$exe`" --hidden"
+
+Step 'A abrir o Jarvis…'
+Start-Process -FilePath $exe -WorkingDirectory $appDir
+Write-Host ''
+Write-Host 'Jarvis instalado. Em Definições → Perfil e equipa: o teu nome, a pasta dos projetos e, se tiveres, o pacote da tua equipa.' -ForegroundColor Green
+Write-Host 'Os motores de IA usam as tuas próprias sessões: Claude Code (claude, depois /login), Antigravity (agy) ou Codex (app Codex).'

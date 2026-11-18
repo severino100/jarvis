@@ -29,16 +29,16 @@ Compras feitas fora do Jarvis (créditos extra no ChatGPT ou na conta Google) de
 - Pelo menos um motor, com a tua conta: [Claude Code](https://claude.com/claude-code), o Antigravity CLI (`agy`, conta Google) ou o Codex (app Codex ou `npm i -g @openai/codex`, conta ChatGPT).
 - Git com acesso aos repositórios da tua equipa.
 - Para o board: Azure DevOps e um token pessoal (Work Items Read & Write, Code Read).
-- Para compilar: Rust estável e Visual Studio Build Tools 2022 com C++.
-- Para a voz: o Whisper e a Piper em `vendor/` (não vêm no repositório).
 
-## Começar
+## Instalar
+
+Numa janela do PowerShell:
 
 ```powershell
-cd native
-cargo build --release
-powershell -ExecutionPolicy Bypass -File ..\scripts\install-native.ps1
+irm https://github.com/severino100/jarvis/releases/latest/download/install.ps1 | iex
 ```
+
+O instalador descarrega o `jarvis.exe` do último release para `%LOCALAPPDATA%\Programs\Jarvis`, a voz (Whisper e Piper com a voz pt-PT, ~600 MB, das fontes oficiais) para `%LOCALAPPDATA%\Jarvis\vendor`, cria os atalhos e liga o arranque com o Windows. Sem voz: descarrega o `install.ps1` e corre-o com `-SemVoz`. Para atualizar, corre-o outra vez (a voz já descarregada não volta a descer).
 
 Depois, no Jarvis, **Definições → Perfil e equipa**:
 
@@ -54,4 +54,6 @@ Um pacote é uma pasta com um `jarvis.toml` (board, repositórios, convenção d
 
 ## Desenvolvimento
 
-O código está em [`native/`](native/) e a documentação técnica em [native/README.md](native/README.md). As regras da conversa estão em [`docs/`](docs/).
+O código está em [`native/`](native/) e a documentação técnica em [native/README.md](native/README.md). As regras da conversa estão em [`docs/`](docs/). Para compilar: Rust estável e Visual Studio Build Tools 2022 com C++; `cargo build --release` em `native/` e `scripts\install-native.ps1` instala o que compilaste no mesmo sítio que o instalador.
+
+Releases: uma tag `v*` (ou "Run workflow" em Actions → release) compila no Windows e publica o `jarvis.exe` e o `install.ps1` num release do GitHub.

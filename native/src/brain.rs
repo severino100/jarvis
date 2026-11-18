@@ -847,7 +847,7 @@ pub struct Prep {
 }
 
 pub fn plan_file(id: i64) -> PathBuf {
-    crate::settings::jarvis_dir().join("plans").join(format!("{id}.json"))
+    crate::settings::data_dir().join("planos").join(format!("{id}.json"))
 }
 
 /// agy allow-rules only match a command line exactly (no prefixes), so every preparation command of this item is

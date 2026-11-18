@@ -266,7 +266,7 @@ pub fn guide(g: Guide) -> Option<PathBuf> {
         Guide::Test => Some("testar-no-browser.md"),
         _ => None,
     };
-    from_pack.or_else(|| generic.map(|n| crate::settings::jarvis_dir().join("docs").join(n)).filter(|f| f.is_file()))
+    from_pack.or_else(|| generic.map(|n| crate::settings::resources_dir().join(n)).filter(|f| f.is_file()))
 }
 
 /// Fills {nome}, {projetos}, {principal}, {repos}, {base}, {ramo_bug}, {ramo}, {worktree}, {fluxo} and

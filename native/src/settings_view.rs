@@ -291,8 +291,8 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
     ui_kit::hud_panel(ui, acc, false, |ui| {
         row(ui, "Voz", "Ctrl+Alt+J ou \"Falar com o Jarvis\" no ícone da bandeja. Diz \"obrigado\" para terminar.", |ui| {
             let (w, p) = voice_ready;
-            ui.label(RichText::new(if w { "Whisper pronto" } else { "Falta o Whisper em vendor/" }).color(if w { theme::GREEN } else { theme::AMBER }));
-            ui.label(RichText::new(if p { "Voz Piper pronta" } else { "Falta a Piper em vendor/" }).color(if p { theme::GREEN } else { theme::AMBER }));
+            ui.label(RichText::new(if w { "Whisper pronto" } else { "Falta o Whisper (instalador)" }).color(if w { theme::GREEN } else { theme::AMBER }));
+            ui.label(RichText::new(if p { "Voz Piper pronta" } else { "Falta a Piper (instalador)" }).color(if p { theme::GREEN } else { theme::AMBER }));
         });
     });
     if s.accent != before.accent || s.ui_scale != before.ui_scale || s.poll_minutes != before.poll_minutes || s.notify != before.notify || s.inform_chat != before.inform_chat || s.meeting_reminder != before.meeting_reminder || s.model != before.model || s.claude_model != before.claude_model || s.agy_model != before.agy_model || s.codex_model != before.codex_model || s.fallback != before.fallback || s.implement_model != before.implement_model || s.startup_sound != before.startup_sound || s.startup_sound_file != before.startup_sound_file || s.music_links != before.music_links {

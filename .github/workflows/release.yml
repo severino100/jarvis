@@ -1,0 +1,41 @@
+# A tag v* (ex.: v0.2.0) compila o Jarvis no Windows e publica um release com o jarvis.exe e o install.ps1,
+# que é o que o instalador dos colegas descarrega.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag do release (ex.: v0.2.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      - name: Compilar
+        working-directory: native
+        run: cargo build --release --locked
+
+      - name: Publicar o release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          name: Jarvis ${{ github.event.inputs.tag || github.ref_name }}
+          generate_release_notes: true
+          files: |
+            native/target/release/jarvis.exe
+            scripts/install.ps1

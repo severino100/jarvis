@@ -659,7 +659,7 @@ impl JarvisApp {
     }
 
     fn voice_ready(&self) -> (bool, bool) {
-        let v = settings::jarvis_dir().join("vendor");
+        let v = settings::vendor_dir();
         let whisper = v.join("models").join("ggml-small.bin").exists()
             && (v.join("whisper").join("Release").join("whisper-cli.exe").exists() || v.join("whisper").join("whisper-cli.exe").exists());
         let piper = v.join("piper").join("piper.exe").exists() && v.join("voices").join("pt_PT-tugao-medium.onnx").exists();

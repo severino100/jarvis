@@ -95,9 +95,47 @@ pub fn data_dir() -> PathBuf {
     dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("Jarvis")
 }
 
-/// The Jarvis folder (scripts/, vendor/ with Whisper and Piper, docs/). The Rust build lives in its native/ folder.
-pub fn jarvis_dir() -> PathBuf {
-    PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/.."))
+/// The source checkout this build came from, when it is still there (a developer's PC).
+fn source_dir() -> Option<PathBuf> {
+    let d = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/.."));
+    d.join("native").join("Cargo.toml").exists().then_some(d)
+}
+
+/// Whisper, Piper and the voices: %LOCALAPPDATA%\Jarvis\vendor (where the installer puts them; local, so ~600 MB do
+/// not roam), or the source checkout's vendor/ on a developer's PC. JARVIS_VENDOR overrides both.
+pub fn vendor_dir() -> PathBuf {
+    if let Ok(v) = std::env::var("JARVIS_VENDOR") {
+        return PathBuf::from(v);
+    }
+    let local = dirs::data_local_dir().unwrap_or_else(|| PathBuf::from(".")).join("Jarvis").join("vendor");
+    let has_voice = |v: &PathBuf| v.join("models").exists() || v.join("piper").exists();
+    if has_voice(&local) {
+        return local;
+    }
+    source_dir().map(|d| d.join("vendor")).filter(has_voice).unwrap_or(local)
+}
+
+/// Files Jarvis needs on disk (the generic guides the AI reads, the Outlook script), compiled into the executable
+/// and written to %APPDATA%\Jarvis\recursos, so the installed jarvis.exe needs nothing next to it.
+pub fn resources_dir() -> PathBuf {
+    const FILES: [(&str, &str); 3] = [
+        ("preparacao.md", include_str!("../../docs/preparacao.md")),
+        ("testar-no-browser.md", include_str!("../../docs/testar-no-browser.md")),
+        ("calendar.ps1", include_str!("../../scripts/calendar.ps1")),
+    ];
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = data_dir().join("recursos");
+        let _ = fs::create_dir_all(&dir);
+        for (name, text) in FILES {
+            let f = dir.join(name);
+            if fs::read_to_string(&f).ok().as_deref() != Some(text) {
+                let _ = fs::write(&f, text);
+            }
+        }
+        dir
+    })
+    .clone()
 }
 
 fn file() -> PathBuf {
