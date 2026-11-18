@@ -1,0 +1,8 @@
+node_modules/
+native/target/
+vendor/
+plans/
+claude-plugin/skills/
+.tmp-*
+*.guardado
+*.log

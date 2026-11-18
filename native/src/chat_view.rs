@@ -1,0 +1,455 @@
+//! Chat view (list + conversation) and the conversation windows. Drawing only: every click becomes an `Action` that
+//! the app applies after the frame, outside the conversations lock.
+
+use crate::{
+    azdo,
+    chat::{Chat, Msg},
+    markdown,
+    theme::{self, Accent},
+    ui_kit::{self, button, display},
+};
+use eframe::egui::{self, vec2, Align, Color32, CornerRadius, Frame, Key, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui};
+use std::collections::HashMap;
+
+pub enum Action {
+    New,
+    Select(String),
+    Send(String, String),
+    Stop(String),
+    Delete(String),
+    OpenInClaude(String),
+    PopOut(String),
+    /// claude | antigravity | other
+    Implement(String, &'static str),
+    /// conversation, engine (claude | antigravity), model
+    SetEngine(String, Option<String>, Option<String>),
+    /// Summarise and continue in a new session.
+    Compact(String),
+}
+
+#[derive(Default)]
+pub struct ChatUi {
+    pub selected: Option<String>,
+    pub drafts: HashMap<String, String>,
+    /// Conversations open in their own window.
+    pub windows: Vec<String>,
+    /// Windows to bring to the front on the next frame (just opened, or opened again).
+    pub focus: Vec<String>,
+    pub confirm_delete: Option<String>,
+    /// Short feedback after an action (e.g. "pedido copiado"), per conversation.
+    pub flash: HashMap<String, (String, std::time::Instant)>,
+}
+
+/// Chat section of the main window: conversation list on the left, the selected conversation on the right.
+pub fn page(ui: &mut Ui, chats: &[Chat], st: &mut ChatUi, acc: Accent) -> Vec<Action> {
+    let mut acts = Vec::new();
+    if st.selected.as_ref().is_none_or(|s| !chats.iter().any(|c| &c.id == s)) {
+        st.selected = chats.first().map(|c| c.id.clone());
+    }
+    let h = ui.available_height();
+    ui.horizontal_top(|ui| {
+        ui.allocate_ui_with_layout(vec2(290.0, h), Layout::top_down(Align::Min), |ui| {
+            ui.set_width(290.0);
+            if button(ui, "Nova conversa", true, acc).clicked() {
+                acts.push(Action::New);
+            }
+            ui.add_space(10.0);
+            ScrollArea::vertical().id_salt("chat-list").auto_shrink([false, false]).show(ui, |ui| {
+                if chats.is_empty() {
+                    ui.label(RichText::new("Ainda não há conversas. Carrega em Começar num item ou abre uma nova.").color(theme::MUTED));
+                }
+                for c in chats {
+                    if list_entry(ui, c, st.selected.as_deref() == Some(&c.id), acc).clicked() {
+                        acts.push(Action::Select(c.id.clone()));
+                    }
+                }
+            });
+        });
+        ui.add_space(18.0);
+        ui.vertical(|ui| {
+            ui.set_min_height(h);
+            match st.selected.clone().and_then(|s| chats.iter().find(|c| c.id == s)) {
+                Some(c) => acts.extend(conversation(ui, c, st, acc, false)),
+                None => ui_kit::quiet(ui, "Escolhe uma conversa ou começa uma nova.", acc),
+            }
+        });
+    });
+    acts
+}
+
+fn list_entry(ui: &mut Ui, c: &Chat, active: bool, acc: Accent) -> egui::Response {
+    let r = Frame::new()
+        .fill(if active { theme::alpha(acc.main, 0.13) } else { theme::GLASS })
+        .stroke(Stroke::new(1.0, theme::alpha(acc.main, if active { 0.3 } else { 0.1 })))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(12, 9))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                if c.busy {
+                    crate::motion::spinner(ui, 12.0 + 2.0, acc.main);
+                } else if c.handed_off {
+                    ui_kit::diamond(ui, false, theme::FAINT, 4.0);
+                } else {
+                    ui_kit::diamond(ui, true, if active { acc.main } else { theme::alpha(theme::MUTED, 0.6) }, 4.0);
+                }
+                ui.add(egui::Label::new(RichText::new(&c.title).strong().color(if active { theme::BRIGHT } else { theme::TEXT })).truncate());
+            });
+            let preview = c.preview();
+            if !preview.is_empty() {
+                ui.add(egui::Label::new(RichText::new(preview).small().color(theme::MUTED)).truncate());
+            }
+            ui.label(RichText::new(ui_kit::when(&c.updated_at)).monospace().size(10.5).color(theme::FAINT));
+        })
+        .response
+        .interact(Sense::click());
+    ui.add_space(6.0);
+    r
+}
+
+/// One conversation: header, messages and the composer. `in_window` hides the pop-out button.
+pub fn conversation(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool) -> Vec<Action> {
+    let mut acts = Vec::new();
+    header(ui, c, st, acc, in_window, &mut acts);
+    ui.add_space(6.0);
+    let composer_h = if c.handed_off { 56.0 } else { 150.0 };
+    let msgs_h = (ui.available_height() - composer_h).max(120.0);
+    Frame::new().fill(theme::alpha(Color32::BLACK, 0.18)).stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.1))).corner_radius(CornerRadius::same(4)).inner_margin(Margin::symmetric(16, 12)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ScrollArea::vertical()
+            .id_salt(("msgs", &c.id))
+            .max_height(msgs_h - 24.0)
+            .auto_shrink([false, false])
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.set_max_width(ui.available_width().min(980.0));
+                if c.messages.is_empty() {
+                    ui.label(RichText::new("Escreve abaixo. A análise é feita aqui; a implementação abre no Claude Code ou no Antigravity.").color(theme::MUTED));
+                }
+                for m in &c.messages {
+                    // A message that just arrived fades in and settles from a little lower.
+                    let k = crate::motion::since(&m.at, 0.35);
+                    ui.scope(|ui| {
+                        if k < 1.0 {
+                            ui.set_opacity(0.2 + 0.8 * k);
+                            if !crate::motion::reduced() {
+                                ui.add_space((1.0 - k) * 8.0);
+                            }
+                            ui.ctx().request_repaint();
+                        }
+                        message(ui, c, m, acc, &mut acts);
+                    });
+                    if m.live {
+                        typing(ui, acc);
+                    }
+                    ui.add_space(10.0);
+                }
+                let last_live = c.messages.last().is_some_and(|m| m.live);
+                if c.busy && !last_live {
+                    ui.horizontal(|ui| {
+                        crate::motion::spinner(ui, 14.0 + 2.0, acc.main);
+                        ui.label(RichText::new("A pensar…").color(theme::MUTED));
+                    });
+                }
+            });
+    });
+    ui.add_space(8.0);
+    composer(ui, c, st, acc, &mut acts);
+    acts
+}
+
+fn header(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool, acts: &mut Vec<Action>) {
+    ui.horizontal(|ui| {
+        if let Some(id) = c.item_id {
+            ui_kit::id_link(ui, id, &azdo::item_url(id), acc);
+        }
+        let title = match c.item_id {
+            Some(id) => c.title.trim_start_matches(&format!("#{id}")).trim().to_owned(),
+            None => c.title.clone(),
+        };
+        ui.add(egui::Label::new(RichText::new(title).font(display(theme::size::SUBTITLE)).color(theme::BRIGHT)).truncate());
+    });
+    ui.horizontal(|ui| {
+        let (cost, tokens) = c.cost_today();
+        let mut info = Vec::new();
+        if c.busy {
+            // How long this reply has been running and how many steps it took, so a long run is visibly alive.
+            let start = c.messages.iter().rposition(|m| m.role == "user").unwrap_or(0);
+            let steps: usize = c.messages[start..].iter().map(|m| m.tools.len()).sum();
+            let secs = c.messages.get(start).and_then(|m| crate::ui_kit::parse(&m.at)).map(|t| (chrono::Local::now() - t).num_seconds().max(0)).unwrap_or(0);
+            let engine = if c.messages[start..].iter().any(crate::chat::is_agy) || c.engine.as_deref() == Some("antigravity") { "Antigravity" } else { "Claude Code" };
+            info.push(format!("{engine} a trabalhar há {}:{:02} · {steps} passo{}", secs / 60, secs % 60, if steps == 1 { "" } else { "s" }));
+        }
+        if c.handed_off {
+            info.push("continua na app do Claude".into());
+        }
+        if let Some(ctx) = c.context_tokens {
+            info.push(format!("contexto {} mil", ctx / 1000));
+        }
+        if tokens > 0 {
+            info.push(format!("hoje {} mil tokens", format!("{:.1}", tokens as f64 / 1000.0).replace('.', ",")));
+        }
+        if cost > 0.0 {
+            info.push(format!("{} USD", format!("{cost:.2}").replace('.', ",")));
+        }
+        if let Some(w) = &c.worktree {
+            info.push(w.rsplit('\\').next().unwrap_or(w).to_owned());
+        }
+        ui.label(RichText::new(info.join(" · ")).monospace().size(11.0).color(theme::MUTED));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if st.confirm_delete.as_deref() == Some(&c.id) {
+                if button(ui, "Sim, apagar", true, acc).clicked() {
+                    acts.push(Action::Delete(c.id.clone()));
+                    st.confirm_delete = None;
+                }
+                if button(ui, "Não", false, acc).clicked() {
+                    st.confirm_delete = None;
+                }
+                ui.label(RichText::new("Apagar esta conversa do Jarvis?").color(theme::AMBER));
+                return;
+            }
+            if !c.busy && button(ui, "Apagar", false, acc).clicked() {
+                st.confirm_delete = Some(c.id.clone());
+            }
+            if c.session_id.is_some() && !c.busy && button(ui, if c.handed_off { "Abrir no Claude" } else { "Continuar no Claude" }, false, acc).on_hover_text("Abre esta sessão na app do Claude (deixa de continuar aqui)").clicked() {
+                acts.push(Action::OpenInClaude(c.id.clone()));
+            }
+            if !in_window && button(ui, "Janela", false, acc).on_hover_text("Abrir numa janela à parte").clicked() {
+                acts.push(Action::PopOut(c.id.clone()));
+            }
+            if let Some((text, at)) = st.flash.get(&c.id) {
+                if at.elapsed().as_secs() < 6 {
+                    ui.label(RichText::new(text).color(theme::GREEN));
+                }
+            }
+        });
+    });
+}
+
+fn who(ui: &mut Ui, text: &str, color: Color32) {
+    ui.label(RichText::new(text).font(display(11.5)).color(color).extra_letter_spacing(1.6));
+}
+
+fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) {
+    match m.role.as_str() {
+        "user" => {
+            who(ui, if m.voice { "TU · POR VOZ" } else { "TU" }, theme::MUTED);
+            Frame::new().fill(theme::alpha(acc.main, 0.1)).stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.2))).corner_radius(CornerRadius::same(4)).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(egui::Label::new(RichText::new(&m.text).color(theme::BRIGHT)).wrap());
+            });
+        }
+        "assistant" => {
+            who(ui, if crate::chat::is_agy(m) { "JARVIS · ANTIGRAVITY" } else { "JARVIS · CLAUDE CODE" }, acc.main);
+            markdown::show(ui, &m.text, acc);
+        }
+        "tools" => {
+            Frame::new().stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.1))).corner_radius(CornerRadius::same(3)).inner_margin(Margin::symmetric(10, 6)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                for t in &m.tools {
+                    ui.horizontal(|ui| {
+                        match t.status.as_str() {
+                            "run" => {
+                                crate::motion::spinner(ui, 10.0 + 2.0, acc.main);
+                            }
+                            s => ui_kit::diamond(ui, true, match s {
+                                "ok" => theme::GREEN,
+                                "error" => theme::RED,
+                                _ => theme::FAINT,
+                            }, 3.5),
+                        }
+                        ui.label(RichText::new(&t.label).size(12.5).color(theme::TEXT));
+                        if !t.detail.is_empty() {
+                            ui.add(egui::Label::new(RichText::new(&t.detail).monospace().size(11.0).color(theme::FAINT)).truncate());
+                        }
+                    });
+                }
+            });
+        }
+        "inform" => {
+            ui_kit::hud_panel(ui, acc, true, |ui| {
+                who(ui, "NOVIDADE DO BOARD", theme::AMBER);
+                markdown::show(ui, &m.text, acc);
+            });
+        }
+        "note" => {
+            ui.label(RichText::new(&m.text).monospace().size(11.0).color(theme::FAINT));
+        }
+        "error" => {
+            ui.label(RichText::new(&m.text).color(theme::RED));
+        }
+        "implement" => {
+            ui_kit::hud_panel(ui, acc, false, |ui| {
+                who(ui, "PRONTO PARA IMPLEMENTAR", acc.main);
+                ui.label(RichText::new(&m.text).size(15.0).strong().color(theme::BRIGHT));
+                if let Some(w) = &m.worktree {
+                    ui.label(RichText::new(w).monospace().size(11.5).color(theme::MUTED));
+                }
+                ui.add_space(6.0);
+                match c.implemented_in.as_deref() {
+                    Some(t) => {
+                        let name = match t {
+                            "claude" => "no Claude Code",
+                            "antigravity" => "no Antigravity",
+                            _ => "noutra IA",
+                        };
+                        ui.label(RichText::new(format!("A implementação seguiu {name}.")).color(theme::GREEN));
+                    }
+                    None => {
+                        ui.horizontal(|ui| {
+                            if button(ui, "Claude Code", true, acc).on_hover_text("Abre esta sessão na app do Claude, com a análise toda").clicked() {
+                                acts.push(Action::Implement(c.id.clone(), "claude"));
+                            }
+                            if button(ui, "Antigravity", false, acc).on_hover_text("Abre o worktree no Antigravity e copia o pedido").clicked() {
+                                acts.push(Action::Implement(c.id.clone(), "antigravity"));
+                            }
+                            if button(ui, "Outra IA", false, acc).on_hover_text("Abre a pasta .jarvis e copia o pedido").clicked() {
+                                acts.push(Action::Implement(c.id.clone(), "other"));
+                            }
+                        });
+                        ui.label(RichText::new("O pedido de implementação fica copiado: cola-o no agente.").small().color(theme::MUTED));
+                    }
+                }
+            });
+        }
+        "divider" => {
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                let w = (ui.available_width() - 360.0).max(40.0) / 2.0;
+                let (l, _) = ui.allocate_exact_size(vec2(w, 10.0), Sense::hover());
+                ui.painter().line_segment([l.left_center(), l.right_center()], Stroke::new(1.0, theme::alpha(acc.main, 0.4)));
+                ui.label(RichText::new(m.text.to_uppercase()).font(display(11.0)).color(acc.light).extra_letter_spacing(1.2));
+                let (r, _) = ui.allocate_exact_size(vec2(w, 10.0), Sense::hover());
+                ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(1.0, theme::alpha(acc.main, 0.4)));
+            });
+            ui.add_space(4.0);
+        }
+        "handoff" => {
+            ui_kit::hint(ui, &m.text, false, acc);
+        }
+        _ => {}
+    }
+}
+
+/// Who answers in this conversation (Claude Code or Antigravity) and with which model. Switching mid-conversation
+/// is fine: the other engine gets what was said since as text.
+fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
+    let defaults = crate::chat::engine();
+    let default_engine = if defaults.model == "gemini" { "antigravity" } else { "claude" };
+    let engine = c.engine.clone().unwrap_or_else(|| default_engine.to_owned());
+    let agy = engine == "antigravity";
+    let models = model_options(agy);
+    let model = c.engine_model.clone().unwrap_or_else(|| {
+        let d = if engine == default_engine { if agy { defaults.agy_model.clone() } else { defaults.claude_model.clone() } } else { String::new() };
+        if d.is_empty() { "auto".into() } else { d }
+    });
+    let model_label = models.iter().find(|(id, _)| *id == model).map(|(_, l)| l.clone()).unwrap_or_else(|| model.clone());
+    ui.add_enabled_ui(!c.busy, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("MOTOR").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
+            let mut pick = engine.clone();
+            egui::ComboBox::from_id_salt(("engine", &c.id)).selected_text(if agy { "Antigravity" } else { "Claude Code" }).width(150.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut pick, "claude".to_owned(), "Claude Code");
+                if crate::brain::gemini_installed() {
+                    ui.selectable_value(&mut pick, "antigravity".to_owned(), "Antigravity");
+                }
+            });
+            if pick != engine {
+                acts.push(Action::SetEngine(c.id.clone(), Some(pick), None));
+            }
+            ui.add_space(12.0);
+            ui.label(RichText::new("MODELO").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
+            let mut m = model.clone();
+            egui::ComboBox::from_id_salt(("model", &c.id)).selected_text(model_label).width(260.0).show_ui(ui, |ui| {
+                for (id, label) in &models {
+                    ui.selectable_value(&mut m, id.clone(), label);
+                }
+            });
+            if m != model {
+                acts.push(Action::SetEngine(c.id.clone(), Some(engine.clone()), Some(m)));
+            }
+        });
+    });
+    ui.add_space(4.0);
+}
+
+fn composer(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, acts: &mut Vec<Action>) {
+    if c.handed_off {
+        ui_kit::quiet(ui, "Esta conversa continua na app do Claude. Para outra análise, abre uma conversa nova.", acc);
+        return;
+    }
+    let id = egui::Id::unique(("composer", &c.id));
+    // Enter sends, Shift+Enter breaks the line: take the key before the text box sees it.
+    let focused = ui.memory(|m| m.has_focus(id));
+    let enter = focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
+    context_warning(ui, c, acc, acts);
+    engine_row(ui, c, acts);
+    let draft = st.drafts.entry(c.id.clone()).or_default();
+    ui.horizontal_top(|ui| {
+        let w = ui.available_width() - 130.0;
+        let hint = if c.busy { "A responder… podes ir escrevendo a próxima." } else { "Escreve ao Jarvis (Enter envia, Shift+Enter muda de linha)" };
+        ui.add(TextEdit::multiline(draft).id(id).hint_text(hint).desired_rows(3).desired_width(w).margin(Margin::symmetric(10, 8)));
+        ui.vertical(|ui| {
+            if c.busy {
+                if button(ui, "Parar", false, acc).clicked() {
+                    acts.push(Action::Stop(c.id.clone()));
+                }
+            } else {
+                let send = button(ui, "Enviar", true, acc).clicked() || enter;
+                if send && !draft.trim().is_empty() {
+                    acts.push(Action::Send(c.id.clone(), std::mem::take(draft)));
+                }
+            }
+        });
+    });
+}
+
+/// Three dots that light up in turn while the reply is still being written.
+fn typing(ui: &mut Ui, acc: Accent) {
+    let (rect, _) = ui.allocate_exact_size(vec2(36.0, 10.0), Sense::hover());
+    let t = crate::motion::now(ui.ctx()) as f32;
+    for i in 0..3 {
+        let k = ((t * 4.0 - i as f32 * 0.7).sin() * 0.5 + 0.5).powf(2.0);
+        let c = egui::pos2(rect.left() + 5.0 + i as f32 * 11.0, rect.center().y);
+        ui.painter().circle_filled(c, 2.4 + 0.8 * k, theme::alpha(acc.main, 0.3 + 0.7 * k));
+    }
+    ui.ctx().request_repaint();
+}
+
+/// Models offered for an engine: (id, label), "auto" first.
+pub fn model_options(agy: bool) -> Vec<(String, String)> {
+    if agy {
+        std::iter::once(("auto".to_owned(), "Predefinido do Antigravity".to_owned())).chain(crate::brain::agy_models()).collect()
+    } else {
+        std::iter::once(("auto".to_owned(), "Automático (Sonnet; Opus se pedires)".to_owned()))
+            .chain(crate::brain::CLAUDE_MODELS.iter().map(|(a, b)| (a.to_string(), b.to_string())))
+            .collect()
+    }
+}
+
+/// Long conversations re-read everything on every message: past the threshold, offer to continue in a new session
+/// from a summary.
+fn context_warning(ui: &mut Ui, c: &Chat, acc: Accent, acts: &mut Vec<Action>) {
+    let Some(ctx) = c.context_tokens.filter(|t| *t >= crate::chat::CONTEXT_WARN) else { return };
+    if c.compacting {
+        ui_kit::hint(ui, "A escrever o resumo para continuar numa sessão nova…", false, acc);
+        ui.add_space(6.0);
+        return;
+    }
+    if c.busy {
+        return;
+    }
+    Frame::new().fill(theme::alpha(theme::AMBER, 0.08)).stroke(Stroke::new(1.0, theme::alpha(theme::AMBER, 0.4))).corner_radius(CornerRadius::same(4)).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
+        ui.set_width(ui.available_width());
+        ui.horizontal(|ui| {
+            ui_kit::diamond(ui, true, theme::AMBER, 4.0);
+            ui.label(RichText::new(format!("Esta conversa já leva {} mil tokens de contexto: cada mensagem relê tudo.", ctx / 1000)).color(theme::TEXT));
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                if button(ui, "Continuar numa sessão nova", false, acc).on_hover_text("O motor escreve um resumo (item, decisões, plano, ficheiros, estado, perguntas) e a conversa segue numa sessão nova a partir dele. O histórico continua visível aqui.").clicked() {
+                    acts.push(Action::Compact(c.id.clone()));
+                }
+            });
+        });
+    });
+    ui.add_space(6.0);
+}
