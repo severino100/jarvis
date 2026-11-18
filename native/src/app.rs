@@ -1453,7 +1453,7 @@ fn voice_button(ui: &mut Ui, on: bool, acc: theme::Accent) -> egui::Response {
     resp.on_hover_text(if on { "Terminar a conversa por voz" } else { "Ctrl+Alt+J. Fala e o Jarvis responde em voz alta; diz \"obrigado\" para terminar." })
 }
 
-/// Puts `"model": "<model>"` in the worktree's .claude/settings.local.json (git-ignored in the ERP), keeping whatever
+/// Puts `"model": "<model>"` in the worktree's .claude/settings.local.json (usually git-ignored), keeping whatever
 /// else is there, so a Claude Code session opened in that folder starts on that model.
 fn set_worktree_model(dir: &std::path::Path, model: &str) {
     let file = dir.join(".claude").join("settings.local.json");
