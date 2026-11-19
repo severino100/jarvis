@@ -265,10 +265,10 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
                 markdown::show(ui, t, acc);
             } else {
                 // An [[EMAIL]] block is a draft card; the rest is text.
-                for part in crate::brain::split_emails(&m.text) {
+                for (i, part) in crate::brain::split_emails(&m.text).into_iter().enumerate() {
                     match part {
                         Err(text) => markdown::show(ui, &text, acc),
-                        Ok(e) => email_card(ui, &e, acc),
+                        Ok(e) => email_card(ui, &e, egui::Id::unique(("email-edit", &m.id, i)), acc),
                     }
                 }
             }
@@ -509,36 +509,68 @@ fn composer(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, acts: &mut Vec<
         });
 }
 
-/// An email the Jarvis drafted: who, subject and body, with "Abrir no Outlook" (a draft ready to send; Jarvis never
-/// sends it) and "Copiar".
-fn email_card(ui: &mut Ui, e: &crate::brain::Email, acc: Accent) {
+/// An email the Jarvis drafted: who, subject and body, with "Editar", "Abrir no Outlook" (a draft ready to send;
+/// Jarvis never sends it) and "Copiar". The edits live in egui's memory under `key` while the window is open; when an
+/// edited version leaves (Outlook or Copiar), its final text is kept as a style example (eu::add_example).
+fn email_card(ui: &mut Ui, original: &crate::brain::Email, key: egui::Id, acc: Accent) {
+    let mut edit: Option<crate::brain::Email> = ui.ctx().data_mut(|d| d.get_temp(key));
+    // JARVIS_SHOT_EDIT=1 opens every draft for editing, for screenshots.
+    let editing = ui.ctx().data_mut(|d| d.get_temp::<bool>(key.with("on"))).unwrap_or(std::env::var("JARVIS_SHOT_EDIT").is_ok());
     ui_kit::hud_panel(ui, acc, false, |ui| {
-        who(ui, "RASCUNHO DE EMAIL", acc.main);
-        for (label, value) in [("Para", &e.to), ("Cc", &e.cc), ("Assunto", &e.subject)] {
-            if label == "Cc" && value.is_empty() {
-                continue;
+        who(ui, if edit.as_ref().is_some_and(|x| x != original) { "RASCUNHO DE EMAIL · EDITADO" } else { "RASCUNHO DE EMAIL" }, acc.main);
+        let e = edit.get_or_insert_with(|| original.clone());
+        if editing {
+            for (label, value) in [("Para", &mut e.to), ("Cc", &mut e.cc), ("Assunto", &mut e.subject)] {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(label).small().color(theme::MUTED));
+                    ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
+                });
             }
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(label).small().color(theme::MUTED));
-                ui.add(egui::Label::new(RichText::new(if value.is_empty() { "(por preencher)" } else { value.as_str() }).color(if value.is_empty() { theme::AMBER } else { theme::BRIGHT })).wrap());
+            ui.add_space(4.0);
+            ui.add(egui::TextEdit::multiline(&mut e.body).desired_rows(8).desired_width(f32::INFINITY));
+        } else {
+            for (label, value) in [("Para", &e.to), ("Cc", &e.cc), ("Assunto", &e.subject)] {
+                if label == "Cc" && value.is_empty() {
+                    continue;
+                }
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(label).small().color(theme::MUTED));
+                    ui.add(egui::Label::new(RichText::new(if value.is_empty() { "(por preencher)" } else { value.as_str() }).color(if value.is_empty() { theme::AMBER } else { theme::BRIGHT })).wrap());
+                });
+            }
+            ui.add_space(4.0);
+            Frame::new().fill(theme::alpha(Color32::BLACK, 0.2)).corner_radius(CornerRadius::same(3)).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.add(egui::Label::new(RichText::new(&e.body).color(theme::TEXT)).wrap());
             });
         }
-        ui.add_space(4.0);
-        Frame::new().fill(theme::alpha(Color32::BLACK, 0.2)).corner_radius(CornerRadius::same(3)).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            ui.add(egui::Label::new(RichText::new(&e.body).color(theme::TEXT)).wrap());
-        });
         ui.add_space(6.0);
+        let mut out = false;
         ui.horizontal(|ui| {
             if button(ui, "Abrir no Outlook", true, acc).on_hover_text("Abre um email novo com isto no Outlook; és tu que o envias").clicked() {
                 let e = e.clone();
                 std::thread::spawn(move || crate::brain::open_email(&e));
+                out = true;
             }
             if button(ui, "Copiar", false, acc).clicked() {
                 ui.ctx().copy_text(crate::brain::email_text(e));
+                out = true;
+            }
+            let toggle = if editing { "Fechar edição" } else { "Editar" };
+            if button(ui, toggle, false, acc).on_hover_text("Muda o rascunho aqui antes de o levares; o Jarvis aprende com a versão final").clicked() {
+                ui.ctx().data_mut(|d| d.insert_temp(key.with("on"), !editing));
             }
         });
+        if out && crate::eu::add_example(&e.subject, &original.body, &e.body) {
+            ui.ctx().data_mut(|d| d.insert_temp(key.with("learned"), true));
+        }
+        if ui.ctx().data_mut(|d| d.get_temp::<bool>(key.with("learned")).unwrap_or(false)) {
+            ui.label(RichText::new("Guardei a tua versão como exemplo de estilo (Definições → O meu Jarvis).").small().color(theme::MUTED));
+        }
     });
+    if let Some(e) = edit {
+        ui.ctx().data_mut(|d| d.insert_temp(key, e));
+    }
 }
 
 /// Three dots that light up in turn while the reply is still being written.

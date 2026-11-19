@@ -100,7 +100,7 @@ impl Chat {
     }
     pub fn preview(&self) -> String {
         let m = self.messages.iter().rev().find(|m| matches!(m.role.as_str(), "assistant" | "user" | "inform"));
-        let t: String = m.map(|m| m.text.as_str()).unwrap_or_default().chars().map(|c| if "#*`|>_".contains(c) { ' ' } else { c }).collect();
+        let t: String = m.map(|m| m.text.replace("[[EMAIL]]", "").replace("[[/EMAIL]]", "")).unwrap_or_default().chars().map(|c| if "#*`|>_".contains(c) { ' ' } else { c }).collect();
         t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect()
     }
 }
@@ -760,7 +760,7 @@ Mensagem de {}:
                 msg("user", "Escreve um email curto à Ana Costa a marcar a segunda entrevista para quinta às 10h. Lembra-te que assino sempre como Rita."),
                 Msg {
                     model: Some("claude".into()),
-                    ..msg("assistant", "Aqui está o rascunho:\n\n**Assunto:** Segunda entrevista: quinta-feira às 10h\n\nOlá Ana,\n\nObrigada pelo seu tempo na primeira conversa. Gostávamos de a convidar para uma segunda entrevista na quinta-feira, às 10h. Consegue confirmar se a hora lhe convém?\n\nCom os melhores cumprimentos,\nRita\n\nNão enviei nada: revê e envia tu pelo Outlook. Queres uma versão mais formal?")
+                    ..msg("assistant", "Aqui está o rascunho:\n\n[[EMAIL]]\nPara: ana.costa@exemplo.pt\nAssunto: Segunda entrevista: quinta-feira às 10h\n---\nOlá Ana,\n\nObrigada pelo seu tempo na primeira conversa. Gostávamos de a convidar para uma segunda entrevista na quinta-feira, às 10h. Consegue confirmar se a hora lhe convém?\n\nCom os melhores cumprimentos,\nRita\n[[/EMAIL]]\n\nNão enviei nada: revê e envia tu pelo Outlook. Queres uma versão mais formal?")
                 },
                 msg("remembered", "assina sempre os emails e mensagens como Rita"),
                 msg("forgotten", "usa sempre o tratamento por você"),

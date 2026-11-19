@@ -154,8 +154,8 @@ pub fn forget(text: &str) -> bool {
 /// What goes into every conversation after Jarvis's rules and the team's: the personal instructions and the memory.
 /// Empty when there is neither.
 pub fn prompt_block() -> String {
-    let (ins, rules) = (instructions(), rules());
-    if ins.is_empty() && rules.is_empty() {
+    let (ins, rules, examples) = (instructions(), rules(), examples());
+    if ins.is_empty() && rules.is_empty() && examples.is_empty() {
         return String::new();
     }
     let name = crate::profile::name();
@@ -169,5 +169,112 @@ pub fn prompt_block() -> String {
         let list: String = rules.iter().map(|r| if r.date.is_empty() { format!("\n- {}", r.text) } else { format!("\n- {} (desde {})", r.text, r.date) }).collect();
         out.push_str(&format!("\n\nMemória (o que {name} te pediu para lembrares):{list}"));
     }
+    if !examples.is_empty() {
+        let list: String = examples.iter().map(|e| format!("\n\n--- {} ---\n{}", if e.subject.is_empty() { "(sem assunto)" } else { &e.subject }, e.body)).collect();
+        out.push_str(&format!(
+            "\n\nExemplos de estilo (rascunhos teus que {name} editou antes de enviar, na versão final). Escreve os próximos como nestes: o tom, o comprimento, as saudações e a assinatura. Usa-os só pelo estilo: nunca reutilizes os nomes, os dados nem o conteúdo deles.{list}"
+        ));
+    }
     out
+}
+
+/* ---------- style examples: the final version of a draft the person edited ---------- */
+
+pub fn examples_file() -> PathBuf {
+    dir().join("exemplos.md")
+}
+
+/// How many examples are kept (the newest); older ones drop off, so they never grow into a store of old emails.
+const MAX_EXAMPLES: usize = 5;
+
+#[derive(Clone, PartialEq)]
+pub struct Example {
+    pub date: String,
+    pub subject: String,
+    pub body: String,
+}
+
+/// exemplos.md: one "## <date> · <subject>" heading per example, the body under it.
+pub fn examples() -> Vec<Example> {
+    let text = fs::read_to_string(examples_file()).unwrap_or_default();
+    let mut out: Vec<Example> = Vec::new();
+    for line in text.lines() {
+        if let Some(h) = line.strip_prefix("## ") {
+            let (date, subject) = h.split_once(" · ").unwrap_or((h, ""));
+            out.push(Example { date: date.trim().to_owned(), subject: subject.trim().to_owned(), body: String::new() });
+        } else if let Some(e) = out.last_mut() {
+            e.body.push_str(line);
+            e.body.push('\n');
+        }
+    }
+    for e in &mut out {
+        e.body = e.body.trim().to_owned();
+    }
+    out.retain(|e| !e.body.is_empty());
+    out
+}
+
+fn save_examples(all: &[Example]) {
+    ensure();
+    let body: String = all.iter().map(|e| format!("## {} · {}\n\n{}\n\n", e.date, e.subject.replace('\n', " "), e.body.trim())).collect();
+    let _ = fs::write(examples_file(), body);
+}
+
+/// Keeps the final version of a draft the person changed before sending (nothing when it was not changed).
+/// Returns true when it was saved.
+pub fn add_example(subject: &str, original: &str, final_body: &str) -> bool {
+    let norm = |s: &str| s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if final_body.trim().is_empty() || norm(original) == norm(final_body) {
+        return false;
+    }
+    let mut all = examples();
+    all.retain(|e| norm(&e.body) != norm(final_body));
+    all.push(Example { date: chrono::Local::now().format("%Y-%m-%d").to_string(), subject: subject.trim().to_owned(), body: final_body.trim().to_owned() });
+    let extra = all.len().saturating_sub(MAX_EXAMPLES);
+    all.drain(..extra);
+    save_examples(&all);
+    true
+}
+
+pub fn remove_example(index: usize) {
+    let mut all = examples();
+    if index < all.len() {
+        all.remove(index);
+        save_examples(&all);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // One test only: it points JARVIS_DATA_DIR at a temporary folder for the whole process.
+    #[test]
+    fn style_examples() {
+        let d = std::env::temp_dir().join(format!("jarvis-eu-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        // SAFETY: the only test that touches the environment, before anything else reads it.
+        unsafe { std::env::set_var("JARVIS_DATA_DIR", &d) };
+        // Unchanged drafts teach nothing.
+        assert!(!add_example("A", "Olá Ana,\n\nAté já.", "Olá Ana,  \n\nAté já."));
+        assert!(examples().is_empty());
+        assert!(add_example("Entrevista", "Olá Ana,", "Viva Ana!\n\nAbç,\nR."));
+        let e = examples();
+        assert_eq!(e.len(), 1);
+        assert_eq!(e[0].subject, "Entrevista");
+        assert_eq!(e[0].body, "Viva Ana!\n\nAbç,\nR.");
+        assert!(prompt_block().contains("Viva Ana!"));
+        // The same final text twice is kept once; only the newest five stay.
+        assert!(add_example("Entrevista", "x", "Viva Ana!\n\nAbç,\nR."));
+        for i in 0..6 {
+            add_example(&format!("S{i}"), "x", &format!("corpo {i}"));
+        }
+        let e = examples();
+        assert_eq!(e.len(), MAX_EXAMPLES);
+        assert_eq!(e.last().unwrap().body, "corpo 5");
+        assert_eq!(e.first().unwrap().body, "corpo 1");
+        remove_example(0);
+        assert_eq!(examples().first().unwrap().body, "corpo 2");
+        let _ = fs::remove_dir_all(&d);
+    }
 }
