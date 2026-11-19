@@ -1156,7 +1156,6 @@ pub fn plan_file(id: i64) -> PathBuf {
 /// written out in full: these, and nothing else, can run. A reset, a checkout or a push stay blocked.
 pub fn prep_commands(p: &Prep) -> Vec<String> {
     use crate::profile;
-    let slash = |p: &Path| p.to_string_lossy().replace('\\', "/");
     let (id, branch, base) = (p.id, &p.branch, profile::branches().base);
     let mut out = Vec::new();
     if let Some(cli) = profile::skill_cli() {
@@ -1165,13 +1164,30 @@ pub fn prep_commands(p: &Prep) -> Vec<String> {
         out.push(format!("node {cli} apply {id} {plan}"));
     }
     for r in profile::repos() {
-        let (repo, wt) = (profile::repo_dir(&r), profile::worktree_dir(&r, id));
-        let (repo_s, wt_s) = (slash(&repo), slash(&wt));
-        out.push(format!("git -C {repo_s} fetch origin {base}"));
-        out.push(format!("git -C {repo_s} worktree add -b {branch} {wt_s} origin/{base}"));
-        if r.link_node_modules {
-            out.push(format!(r"cmd /c mklink /J {}\node_modules {}\node_modules", wt.display(), repo.display()));
-        }
+        out.extend(repo_prep_commands(&r, &profile::repo_dir(&r), &profile::worktree_dir(&r, id), branch, &base));
+    }
+    out
+}
+
+fn slash(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+/// The preparation commands of one repository. Normally a worktree on a new branch; for a `branch_only` repository
+/// (its main folder is what runs, e.g. in Docker Compose) only reads the folder's state and creates the branch
+/// without switching to it: the folder must be clean to switch, and whoever implements does the switch.
+fn repo_prep_commands(r: &crate::profile::RepoCfg, repo: &Path, wt: &Path, branch: &str, base: &str) -> Vec<String> {
+    let repo_s = slash(repo);
+    let mut out = vec![format!("git -C {repo_s} fetch origin {base}")];
+    if r.branch_only {
+        out.push(format!("git -C {repo_s} status --porcelain"));
+        out.push(format!("git -C {repo_s} branch --show-current"));
+        out.push(format!("git -C {repo_s} branch {branch} origin/{base}"));
+        return out;
+    }
+    out.push(format!("git -C {repo_s} worktree add -b {branch} {} origin/{base}", slash(wt)));
+    if r.link_node_modules {
+        out.push(format!(r"cmd /c mklink /J {}\node_modules {}\node_modules", wt.display(), repo.display()));
     }
     out
 }
@@ -1183,8 +1199,14 @@ fn agy_settings(prep: Option<&Prep>) -> String {
 
 fn prep_text(p: &Prep) -> String {
     let list = prep_commands(p).iter().map(|c| format!("- `{c}`")).collect::<Vec<_>>().join("\n");
+    let branch_only: Vec<String> = crate::profile::repos().iter().filter(|r| r.branch_only).map(|r| r.side.clone()).collect();
+    let branch_only = if branch_only.is_empty() {
+        String::new()
+    } else {
+        format!("O lado {} não tem worktree: corre o `status --porcelain` e, só se vier vazio, cria o branch; não mudas para ele (quem implementa muda). ", branch_only.join(", "))
+    };
     format!(
-        "Comandos de preparação autorizados para o #{} (só estes correm; escreve-os exatamente assim, sem mudar nem acrescentar nada):\n{list}\n\n{}Corre só os do lado que o plano toca ({}), e só depois de um sim claro de {} nesta conversa.",
+        "Comandos de preparação autorizados para o #{} (só estes correm; escreve-os exatamente assim, sem mudar nem acrescentar nada):\n{list}\n\n{branch_only}{}Corre só os do lado que o plano toca ({}), e só depois de um sim claro de {} nesta conversa.",
         p.id,
         match crate::profile::skill_dir() {
             Some(d) if crate::profile::skill_cli().is_some() => format!("O plano para o apply vai em {} (no formato da skill {}). ", plan_file(p.id).display(), d.file_name().unwrap_or_default().to_string_lossy()),
@@ -1193,4 +1215,35 @@ fn prep_text(p: &Prep) -> String {
         crate::profile::repos().iter().map(|r| format!("{} = {}", r.side, if r.label.is_empty() { &r.dir } else { &r.label })).collect::<Vec<_>>().join(", "),
         crate::profile::name()
     )
+}
+
+#[cfg(test)]
+mod prep_tests {
+    use super::*;
+    use crate::profile::RepoCfg;
+
+    #[test]
+    fn a_worktree_repo_gets_a_worktree_and_a_branch_only_repo_does_not() {
+        let repo = Path::new(r"C:\p\App");
+        let wt = Path::new(r"C:\p\App-1");
+        let front = RepoCfg { link_node_modules: true, ..Default::default() };
+        let cmds = repo_prep_commands(&front, repo, wt, "feature/S1/1", "dev");
+        assert_eq!(cmds[0], "git -C C:/p/App fetch origin dev");
+        assert_eq!(cmds[1], "git -C C:/p/App worktree add -b feature/S1/1 C:/p/App-1 origin/dev");
+        assert!(cmds[2].starts_with("cmd /c mklink /J"));
+
+        let back = RepoCfg { branch_only: true, ..Default::default() };
+        let cmds = repo_prep_commands(&back, repo, wt, "feature/S1/1", "dev");
+        assert_eq!(
+            cmds,
+            [
+                "git -C C:/p/App fetch origin dev",
+                "git -C C:/p/App status --porcelain",
+                "git -C C:/p/App branch --show-current",
+                "git -C C:/p/App branch feature/S1/1 origin/dev",
+            ]
+        );
+        // Never a worktree, a switch or a checkout for a branch-only repository.
+        assert!(cmds.iter().all(|c| !c.contains("worktree") && !c.contains("switch") && !c.contains("checkout")));
+    }
 }

@@ -153,6 +153,10 @@ pub struct RepoCfg {
     pub main: bool,
     /// Worktrees get node_modules as a junction to the main folder's.
     pub link_node_modules: bool,
+    /// No per-item worktree: an item is a branch in the repository's main folder. For a back end that runs in Docker
+    /// Compose from that folder, where a worktree never reaches the containers. Antigravity's preparation then only
+    /// reads the folder's state and creates the branch (no switch); whoever implements switches to it.
+    pub branch_only: bool,
 }
 
 #[derive(Clone, Deserialize)]

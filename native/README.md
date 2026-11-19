@@ -155,7 +155,15 @@ dir = "o-meu-front"
 label = "front"
 main = true
 link_node_modules = true
+
+[[repo]]
+side = "API"
+dir = "o-meu-back"
+label = "back"
+branch_only = true                # opcional: sem worktree, o item é um branch na pasta principal
 ```
+
+`branch_only = true` serve para um repositório cuja pasta principal é o que corre (por exemplo um back em Docker Compose, onde um worktree nunca chega aos containers). Na preparação pelo Antigravity, esse repositório não recebe o `git worktree add`: só os comandos `fetch`, `status --porcelain`, `branch --show-current` e `branch <ramo> origin/<base>` (criar o branch sem mudar para ele). Quem implementa muda para o branch, com a pasta limpa. A limpeza (`cleanup.rs`) continua a listar worktrees antigos desse repositório pelo padrão `[branches] worktree`; deixa de haver novos.
 
 ## Tokens
 
