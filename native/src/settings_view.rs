@@ -318,6 +318,42 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
             ui.label(RichText::new(if p { "Voz Piper pronta" } else { "Falta a Piper (instalador)" }).color(if p { theme::GREEN } else { theme::AMBER }));
         });
     });
+    ui.add_space(10.0);
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        use crate::update::{self, State};
+        row(ui, "Versão", "O Jarvis vê no GitHub se há versão nova ao arrancar e de 6 em 6 horas. Instalar descarrega o instalador novo, fecha o Jarvis e volta a abri-lo; as conversas e as definições ficam.", |ui| {
+            ui.label(RichText::new(format!("Jarvis {}", update::current())).color(theme::BRIGHT));
+            if !update::installed() {
+                ui.label(RichText::new("Compilado a partir do código: não se atualiza sozinho.").small().color(theme::FAINT));
+                return;
+            }
+            match update::state() {
+                State::Available { version, .. } => {
+                    ui.label(RichText::new(format!("Há a {version}")).color(theme::GREEN));
+                    if ui_kit::button(ui, "Instalar", true, acc).clicked() {
+                        update::install();
+                    }
+                }
+                State::Downloading { version } => {
+                    ui.label(RichText::new(format!("A descarregar a {version}…")).color(acc.light));
+                }
+                st => {
+                    let (text, color) = match &st {
+                        State::Checking => ("A ver…".to_owned(), theme::MUTED),
+                        State::UpToDate => ("É a mais recente.".to_owned(), theme::GREEN),
+                        State::Failed(e) => (e.clone(), theme::AMBER),
+                        _ => (String::new(), theme::MUTED),
+                    };
+                    if !text.is_empty() {
+                        ui.label(RichText::new(text).small().color(color));
+                    }
+                    if st != State::Checking && ui_kit::button(ui, "Procurar agora", false, acc).clicked() {
+                        update::check_now();
+                    }
+                }
+            }
+        });
+    });
     if s.accent != before.accent || s.ui_scale != before.ui_scale || s.poll_minutes != before.poll_minutes || s.notify != before.notify || s.inform_chat != before.inform_chat || s.meeting_reminder != before.meeting_reminder || s.model != before.model || s.claude_model != before.claude_model || s.agy_model != before.agy_model || s.codex_model != before.codex_model || s.fallback != before.fallback || s.implement_model != before.implement_model || s.startup_sound != before.startup_sound || s.startup_sound_file != before.startup_sound_file || s.music_links != before.music_links {
         settings::update(|x| *x = s);
     }

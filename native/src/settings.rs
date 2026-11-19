@@ -87,6 +87,8 @@ pub struct State {
     pub settings: Settings,
     /// The Electron conversations (chats.json) were copied into chats-native.json.
     pub imported_electron_chats: bool,
+    /// The newest version already announced in a notice (update.rs), so each one is announced once.
+    pub update_seen: String,
 }
 
 const DEFAULTS_VERSION: u32 = 1;

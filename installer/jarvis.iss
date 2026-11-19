@@ -93,6 +93,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\jarvis.exe"; WorkingDir: "{app}"; Description: "Abrir o Jarvis"; Flags: nowait postinstall skipifsilent
+; A atualização feita pelo próprio Jarvis (update.rs) corre o setup em silêncio com /relancar=1: abre-o no fim.
+Filename: "{app}\jarvis.exe"; WorkingDir: "{app}"; Flags: nowait; Check: Relancar
 
 [Code]
 const
@@ -101,6 +103,11 @@ const
 var
   Requisitos: TWizardPage;
   Links: array[0..Itens - 1] of String;
+
+function Relancar: Boolean;
+begin
+  Result := WizardSilent and (ExpandConstant('{param:relancar|0}') = '1');
+end;
 
 // Um ficheiro da voz que ainda não está em %LOCALAPPDATA%\Jarvis\vendor (o que já lá está não volta a descer).
 function Falta(Relativo: String): Boolean;

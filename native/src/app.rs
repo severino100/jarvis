@@ -227,6 +227,10 @@ impl JarvisApp {
                 post(AppEvent::Refresh);
             }
         });
+        // A new release on GitHub: a notice once and "Atualizar" at the bottom of the menu.
+        if std::env::var("JARVIS_SHOT_RS").is_err() || std::env::var("JARVIS_UPDATE_FROM").is_ok() {
+            crate::update::start();
+        }
         // The start-up sound, with the start-up sequence (not when starting hidden in the tray, nor for screenshots).
         if !std::env::args().any(|a| a == "--hidden") && std::env::var("JARVIS_SHOT_RS").is_err() {
             crate::sound::play_startup(if s.startup_sound.is_empty() { "original" } else { &s.startup_sound }, &s.startup_sound_file);
@@ -577,6 +581,7 @@ impl JarvisApp {
                         self.view = View::Settings;
                     }
                 });
+                update_box(ui, acc);
                 if !dev {
                     if let Some(note) = &self.hotkey_note {
                         ui.label(RichText::new(note).small().color(theme::AMBER));
@@ -1352,6 +1357,37 @@ pub fn claim_in_background(chats: &Chats, board: &Board, chat_id: &str, id: i64)
         Ok(_) => {}
         Err(e) => chats.add_note(&chat_id, &format!("Não consegui atualizar o #{id} no Azure DevOps: {}", e.lines().next().unwrap_or_default()), "error"),
     });
+}
+
+/// A new version on GitHub, at the bottom of the menu: "Atualizar" installs it and opens Jarvis again.
+fn update_box(ui: &mut Ui, acc: theme::Accent) {
+    use crate::update::State;
+    let st = crate::update::state();
+    let (text, button) = match &st {
+        State::Available { version, .. } => (format!("Versão nova: {version}"), true),
+        State::Downloading { version } => (format!("A instalar a {version}…"), false),
+        _ => return,
+    };
+    ui.add_space(6.0);
+    Frame::new()
+        .fill(theme::alpha(acc.main, 0.12))
+        .stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.45)))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(10, 6))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(text).small().color(theme::BRIGHT));
+                if button {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        let hint = format!("Tens a {}. Descarrega o instalador novo, fecha o Jarvis e volta a abri-lo; as conversas e as definições ficam.", crate::update::current());
+                        if ui_kit::button(ui, "Instalar", true, acc).on_hover_text(hint).clicked() {
+                            crate::update::install();
+                        }
+                    });
+                }
+            });
+        });
 }
 
 fn sprint_box(ui: &mut Ui, d: &crate::azdo::Dashboard, acc: theme::Accent) {

@@ -29,6 +29,7 @@ mod profile;
 mod eu;
 mod welcome;
 mod theme;
+mod update;
 
 use app::{AppEvent, JarvisApp};
 use eframe::egui;
@@ -93,6 +94,11 @@ fn main() -> eframe::Result {
     }
     // Dev aid: `jarvis --ask claude|gemini|codex "texto" [modelo] [sessão]` runs one turn and prints the stream (no window).
     let args: Vec<String> = std::env::args().collect();
+    // Dev aid: `jarvis --update-test` reads the latest GitHub release and downloads its setup (does not run it).
+    if args.get(1).map(String::as_str) == Some("--update-test") {
+        println!("{:?}", update::self_test());
+        return Ok(());
+    }
     if args.get(1).map(String::as_str) == Some("--voice-test") {
         let t = std::time::Instant::now();
         println!("{:?} em {:.1}s", voice::self_test(args.get(2).map(String::as_str).unwrap_or("Jarvis, o que tenho para fazer hoje?")), t.elapsed().as_secs_f32());
