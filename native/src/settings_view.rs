@@ -468,6 +468,22 @@ fn mine_panel(ui: &mut Ui, acc: Accent) {
                 }
             }
         });
+        row(ui, "No menu", "Os ecrãs que ficam no menu à esquerda. Hoje e Definições ficam sempre; os do desenvolvimento só aparecem com esse modo.", |ui| {
+            let dev = p.modes.iter().any(|m| m == profile::DEV);
+            for (key, label, dev_only) in crate::app::menu_entries() {
+                if dev_only && !dev {
+                    continue;
+                }
+                let mut on = !p.menu_hidden.contains(&key);
+                if ui.checkbox(&mut on, label).changed() {
+                    if on {
+                        p.menu_hidden.retain(|h| *h != key);
+                    } else {
+                        p.menu_hidden.push(key);
+                    }
+                }
+            }
+        });
     });
     if p != before {
         profile::update(|x| *x = p);

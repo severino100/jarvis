@@ -32,6 +32,8 @@ pub struct Profile {
     pub modes: Vec<String>,
     /// Blocks of the Hoje screen this person turned off (see `dashboard::BLOCKS`); everything else shows.
     pub today_hidden: Vec<String>,
+    /// Menu entries this person hid (keys of `app::menu_entries`); Hoje and Definições always stay.
+    pub menu_hidden: Vec<String>,
     /// The guided first run is done (or was skipped). A profile file from before it existed reads as done: only a
     /// person who never had a profile is guided.
     #[serde(default = "yes")]
@@ -53,6 +55,7 @@ impl Default for Profile {
             board_token: String::new(),
             modes: vec![DEV.into()],
             today_hidden: Vec::new(),
+            menu_hidden: Vec::new(),
             welcomed: true,
         }
     }

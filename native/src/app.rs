@@ -62,9 +62,19 @@ fn dev_only(v: View) -> bool {
     matches!(v, View::Now | View::Prs | View::Review | View::Refined | View::Hours | View::Cleanup)
 }
 
-/// Whether a view belongs to the modes that are on (Definições → O meu Jarvis).
+/// The key a menu entry is saved under in `Profile.menu_hidden` ("agenda", "prs"…).
+fn menu_key(v: View) -> String {
+    format!("{v:?}").to_lowercase()
+}
+
+/// The menu entries a person may hide (Hoje always stays): (key, label, only with the dev mode).
+pub fn menu_entries() -> Vec<(String, &'static str, bool)> {
+    NAV.iter().filter(|(v, _)| *v != View::Today).map(|(v, l)| (menu_key(*v), *l, dev_only(*v))).collect()
+}
+
+/// Whether a view belongs to the modes that are on and was not hidden by the person (Definições → O meu Jarvis).
 pub fn shown(v: View) -> bool {
-    !dev_only(v) || crate::profile::dev()
+    (!dev_only(v) || crate::profile::dev()) && (matches!(v, View::Today | View::Settings) || !crate::profile::get().menu_hidden.contains(&menu_key(v)))
 }
 
 #[derive(Clone)]
