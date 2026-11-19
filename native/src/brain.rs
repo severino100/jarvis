@@ -580,6 +580,51 @@ pub fn codex_installed() -> bool {
     codex_exe().is_some()
 }
 
+/// Whether an installed engine has the person's account signed in, without spending any usage: `claude auth status`,
+/// `codex login status`, and Antigravity's saved Google sign-in. None when it cannot tell (not installed, or the
+/// command failed); the conversation still says what to do then.
+pub fn signed_in(engine: &str) -> Option<bool> {
+    let quiet = |mut c: Command| {
+        for (k, _) in std::env::vars() {
+            let up = k.to_uppercase();
+            if up.starts_with("CLAUDE") || up.starts_with("ANTHROPIC") {
+                c.env_remove(k);
+            }
+        }
+        c.creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null()).output().ok()
+    };
+    match engine {
+        "claude" => {
+            if !claude_installed() {
+                return None;
+            }
+            let mut c = Command::new(claude_exe());
+            c.args(["auth", "status"]);
+            let o = quiet(c)?;
+            let j: Value = serde_json::from_slice(&o.stdout).ok()?;
+            j["loggedIn"].as_bool()
+        }
+        "codex" => {
+            let mut c = Command::new(codex_exe()?);
+            c.args(["login", "status"]);
+            let o = quiet(c)?;
+            let said = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)).to_lowercase();
+            Some(o.status.success() && said.contains("logged in") && !said.contains("not logged in"))
+        }
+        "antigravity" => {
+            agy_exe()?;
+            let creds = fs::read_to_string(home().join(".gemini").join("oauth_creds.json")).unwrap_or_default();
+            Some(creds.contains("refresh_token"))
+        }
+        _ => None,
+    }
+}
+
+/// Opens a terminal with the engine's sign-in (the person signs in there with their own account).
+pub fn open_sign_in(command: &str) {
+    let _ = Command::new("cmd.exe").args(["/c", "start", "Jarvis - iniciar sessão", "powershell.exe", "-NoExit", "-Command", command]).creation_flags(CREATE_NO_WINDOW).spawn();
+}
+
 /// Models the Codex CLI offers to this account (`codex debug models`, the listed ones), read once in the background.
 pub fn codex_models() -> Vec<(String, String)> {
     static LIST: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();

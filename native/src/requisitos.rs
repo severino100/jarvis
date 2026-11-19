@@ -22,6 +22,9 @@ pub struct Need {
     pub then: &'static str,
     pub link: &'static str,
     pub engine: bool,
+    /// The engine id for `brain::signed_in` and the command that signs in (empty for git).
+    pub id: &'static str,
+    pub login: &'static str,
 }
 
 pub const NEEDS: [Need; 4] = [
@@ -32,6 +35,8 @@ pub const NEEDS: [Need; 4] = [
         then: "Depois, num terminal novo, escreve claude e entra com a tua conta (nunca com chave de API).",
         link: "https://code.claude.com/docs/en/setup",
         engine: true,
+        id: "claude",
+        login: "claude auth login",
     },
     Need {
         name: "Antigravity",
@@ -40,6 +45,8 @@ pub const NEEDS: [Need; 4] = [
         then: "Depois, num terminal novo, escreve agy e entra com a tua conta Google.",
         link: "https://antigravity.google",
         engine: true,
+        id: "antigravity",
+        login: "agy",
     },
     Need {
         name: "Codex",
@@ -48,6 +55,8 @@ pub const NEEDS: [Need; 4] = [
         then: "Ou instala a app Codex. Depois: codex login e escolhe Sign in with ChatGPT (nunca chave de API).",
         link: "https://developers.openai.com/codex",
         engine: true,
+        id: "codex",
+        login: "codex login",
     },
     Need {
         name: "Git",
@@ -56,6 +65,8 @@ pub const NEEDS: [Need; 4] = [
         then: "Depois fecha e abre o Jarvis, para ele ver o git novo.",
         link: "https://git-scm.com/downloads/win",
         engine: false,
+        id: "",
+        login: "",
     },
 ];
 
@@ -76,10 +87,28 @@ fn check() -> Vec<bool> {
     vec![brain::claude_installed(), brain::gemini_installed(), brain::codex_installed(), git_installed()]
 }
 
+/// Per entry of NEEDS: Some(false) when an installed engine has no account signed in (None: cannot tell, or not an
+/// engine). JARVIS_SHOT_NO_LOGIN=1 shows every installed engine as signed out, for screenshots.
+fn sessions(found: &[bool]) -> Vec<Option<bool>> {
+    NEEDS
+        .iter()
+        .zip(found)
+        .map(|(n, ok)| {
+            if !*ok || n.id.is_empty() {
+                None
+            } else if std::env::var("JARVIS_SHOT_NO_LOGIN").is_ok() {
+                Some(false)
+            } else {
+                brain::signed_in(n.id)
+            }
+        })
+        .collect()
+}
+
 enum State {
     Idle,
     Checking,
-    Done(Vec<bool>),
+    Done(Vec<bool>, Vec<Option<bool>>),
 }
 
 static STATE: Mutex<State> = Mutex::new(State::Idle);
@@ -88,14 +117,15 @@ static STATE: Mutex<State> = Mutex::new(State::Idle);
 pub fn get(ctx: &egui::Context) -> Option<Vec<bool>> {
     let mut st = STATE.lock().unwrap();
     match &*st {
-        State::Done(v) => Some(v.clone()),
+        State::Done(v, _) => Some(v.clone()),
         State::Checking => None,
         State::Idle => {
             *st = State::Checking;
             let ctx = ctx.clone();
             std::thread::spawn(move || {
                 let v = check();
-                *STATE.lock().unwrap() = State::Done(v);
+                let s = sessions(&v);
+                *STATE.lock().unwrap() = State::Done(v, s);
                 ctx.request_repaint();
             });
             None
@@ -120,13 +150,26 @@ pub fn panel(ui: &mut Ui, acc: Accent) {
         });
         return;
     };
-    let engines = NEEDS.iter().zip(&found).any(|(n, ok)| n.engine && *ok);
-    for (need, ok) in NEEDS.iter().zip(found.iter().copied()) {
+    let signed = match &*STATE.lock().unwrap() {
+        State::Done(_, s) => s.clone(),
+        _ => Vec::new(),
+    };
+    let signed_out = |i: usize| signed.get(i).copied().flatten() == Some(false);
+    // An engine counts once it is installed and not known to be signed out.
+    let engines = NEEDS.iter().zip(&found).enumerate().any(|(i, (n, ok))| n.engine && *ok && !signed_out(i));
+    for (i, (need, ok)) in NEEDS.iter().zip(found.iter().copied()).enumerate() {
         ui.horizontal(|ui| {
-            ui_kit::diamond(ui, ok, if ok { theme::GREEN } else { theme::AMBER }, 4.0);
+            let good = ok && !signed_out(i);
+            ui_kit::diamond(ui, good, if good { theme::GREEN } else { theme::AMBER }, 4.0);
             ui.label(RichText::new(need.name).color(theme::BRIGHT).strong());
-            if ok {
-                ui.label(RichText::new("instalado").small().color(theme::GREEN));
+            if ok && signed_out(i) {
+                ui.label(RichText::new("instalado, mas sem sessão iniciada").small().color(if engines { theme::MUTED } else { theme::AMBER }));
+                if button(ui, "Iniciar sessão", !engines, acc).on_hover_text(format!("Abre um terminal com {}: entra com a tua conta e depois carrega em Verificar outra vez", need.login)).clicked() {
+                    brain::open_sign_in(need.login);
+                }
+            } else if ok {
+                let label = if signed.get(i).copied().flatten() == Some(true) { "instalado, sessão iniciada" } else { "instalado" };
+                ui.label(RichText::new(label).small().color(theme::GREEN));
             } else {
                 // An engine is optional once another one is there.
                 let optional = need.engine && engines;
@@ -152,7 +195,7 @@ pub fn panel(ui: &mut Ui, acc: Accent) {
         ui.add_space(6.0);
     }
     if !engines {
-        ui_kit::hint(ui, "Sem nenhum motor de IA o Jarvis não consegue responder nas conversas. Instala um, entra com a tua conta e carrega em Verificar outra vez.", true, acc);
+        ui_kit::hint(ui, "Sem um motor de IA instalado e com sessão iniciada o Jarvis não consegue responder nas conversas. Instala um (ou carrega em Iniciar sessão), entra com a tua conta e carrega em Verificar outra vez.", true, acc);
         ui.add_space(6.0);
     }
     if button(ui, "Verificar outra vez", false, acc).clicked() {
