@@ -603,6 +603,30 @@ pub fn codex_models() -> Vec<(String, String)> {
     cell.lock().unwrap().clone()
 }
 
+/// The model `model = "…"` in ~/.codex/config.toml, when there is one.
+fn codex_config_model() -> Option<String> {
+    let text = fs::read_to_string(home().join(".codex").join("config.toml")).ok()?;
+    let v: toml::Table = toml::from_str(&text).ok()?;
+    v.get("model")?.as_str().map(str::to_owned)
+}
+
+/// The models Codex offers this account (`codex debug models`, visibility "list"), in its order; empty when this
+/// Codex cannot say (an old CLI).
+fn codex_listed(exe: &Path) -> Vec<String> {
+    let Ok(o) = Command::new(exe).args(["debug", "models"]).creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null()).output() else { return Vec::new() };
+    let Ok(j) = serde_json::from_slice::<Value>(&o.stdout) else { return Vec::new() };
+    let list = j["models"].as_array().or(j.as_array()).cloned().unwrap_or_default();
+    list.iter().filter(|m| m["visibility"] == "list").filter_map(|m| m["slug"].as_str().map(str::to_owned)).collect()
+}
+
+/// For "Predefinido": None keeps the config's model; Some(first listed) when the config names a model this account
+/// does not have, which Codex would refuse ("not supported when using Codex with a ChatGPT account").
+fn codex_default_fallback(exe: &Path) -> Option<String> {
+    let configured = codex_config_model()?;
+    let listed = codex_listed(exe);
+    (!listed.is_empty() && !listed.contains(&configured)).then(|| listed[0].clone())
+}
+
 /// One Codex turn (`codex exec --json`): the first turn of a conversation gets the rules and the conversation so far;
 /// later turns resume the Codex thread. Codex works in its sandbox with write access to the projects folder only.
 pub fn ask_codex(text: &str, history: &str, turn: &Turn, thread: Option<&str>, model: Option<&str>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
@@ -655,7 +679,10 @@ pub fn ask_codex(text: &str, history: &str, turn: &Turn, thread: Option<&str>, m
         .args(["-c", "notify=[]", "-c", "model_reasoning_effort=\"medium\""])
         // Only the ChatGPT subscription login, never an API key (pay-per-use).
         .args(["-c", "forced_login_method=\"chatgpt\""]);
-    if let Some(m) = model.filter(|m| !m.is_empty()) {
+    // "Predefinido" uses the model in the person's config.toml, which may be one the ChatGPT account no longer has
+    // (an old gpt-5.5 left there): then the first model Codex lists for this account.
+    let model = model.filter(|m| !m.is_empty()).map(str::to_owned).or_else(|| codex_default_fallback(&exe));
+    if let Some(m) = &model {
         cmd.args(["-m", m]);
     }
     // The elevated Windows sandbox needs a console: with Jarvis's hidden one, its commands never return.
@@ -714,7 +741,7 @@ pub fn ask_codex(text: &str, history: &str, turn: &Turn, thread: Option<&str>, m
         return Err(if last.is_empty() { format!("O Codex terminou com código {}", code.unwrap_or(-1)) } else { last });
     };
     let input = u["input_tokens"].as_u64().unwrap_or(0);
-    let label = model.and_then(|m| codex_models().into_iter().find(|(id, _)| id == m).map(|(_, l)| l)).unwrap_or_else(|| "Codex".into());
+    let label = model.as_deref().and_then(|m| codex_models().into_iter().find(|(id, _)| id == m).map(|(_, l)| l)).unwrap_or_else(|| "Codex".into());
     Ok(Outcome { stopped: false, tokens: input + u["output_tokens"].as_u64().unwrap_or(0), cost: None, model: Some(label), max_turns: false, context: Some(input) })
 }
 
