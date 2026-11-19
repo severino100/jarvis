@@ -43,6 +43,8 @@ pub struct Settings {
     pub startup_sound_file: String,
     /// Favourite playlists: one per line, "Nome | link" (Spotify or Apple Music)
     pub music_links: String,
+    /// The music player in its own small window, always on top (instead of the block on Hoje).
+    pub music_window: bool,
 }
 
 impl Default for Settings {
@@ -64,6 +66,7 @@ impl Default for Settings {
             startup_sound: "original".into(),
             startup_sound_file: String::new(),
             music_links: String::new(),
+            music_window: false,
         }
     }
 }

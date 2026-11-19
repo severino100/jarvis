@@ -107,36 +107,45 @@ pub fn view(ui: &mut Ui, d: Option<&Dashboard>, x: &Extras, acc: Accent, go: &mu
         personal(ui, x, acc, go, since);
         return;
     };
+    // Wide screens: stacks of blocks in columns (4 from about 27"), the activity across the bottom.
+    let w = ui.available_width();
+    if w > 700.0 {
+        let b = |f: fn(&mut Ui, &Dashboard, &Extras, Accent, &mut Option<View>)| -> Block<'_> { Box::new(move |ui: &mut Ui, go: &mut Option<View>| f(ui, d, x, acc, go)) };
+        let e = |f: fn(&mut Ui, &Extras, Accent, &mut Option<View>)| -> Block<'_> { Box::new(move |ui: &mut Ui, go: &mut Option<View>| f(ui, x, acc, go)) };
+        if w >= 1800.0 {
+            // Four columns: the activity goes into one of them, so nothing runs across the whole width.
+            masonry(ui, since, &[0.25, 0.27, 0.24, 0.24], vec![
+                vec![b(mine), b(core), e(prs)],
+                vec![b(available), b(review)],
+                vec![e(focus), e(conversations), e(todos), e(feed)],
+                vec![e(telemetry), e(music)],
+            ], go);
+            return;
+        } else if w <= 1100.0 {
+            masonry(ui, since, &[0.5, 0.5], vec![
+                vec![b(mine), b(core), e(prs), e(todos)],
+                vec![b(available), e(focus), b(review), e(telemetry), e(conversations), e(music)],
+            ], go);
+        } else {
+            masonry(ui, since, &[0.31, 0.38, 0.31], vec![
+                vec![b(mine), b(core), e(prs)],
+                vec![b(available), e(focus), b(review)],
+                vec![e(telemetry), e(conversations), e(music), e(todos)],
+            ], go);
+        }
+        ui.add_space(2.0);
+        ui.scope(|ui| {
+            enter(ui, 5);
+            feed(ui, x, acc, go);
+        });
+        return;
+    }
     ui.scope(|ui| {
         enter(ui, 1);
         work(ui, d, x, acc, go);
     });
     ui.add_space(16.0);
-    let wide = ui.available_width() > 1100.0;
-    if wide {
-        let w = ui.available_width();
-        let gap = 18.0;
-        let (a, b) = ((w - 2.0 * gap) * 0.27, (w - 2.0 * gap) * 0.43);
-        let c = w - 2.0 * gap - a - b;
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            ui.allocate_ui_with_layout(vec2(a, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(a);
-                enter(ui, 1);
-                core(ui, d, x, acc, go);
-            });
-            ui.allocate_ui_with_layout(vec2(b, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(b);
-                enter(ui, 2);
-                focus(ui, x, acc, go);
-            });
-            ui.allocate_ui_with_layout(vec2(c, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(c);
-                enter(ui, 3);
-                system(ui, x, acc, go);
-            });
-        });
-    } else if ui.available_width() > 700.0 {
+    if ui.available_width() > 700.0 {
         // Medium window: the core beside the focus, then telemetry beside the conversations.
         ui.columns(2, |cols| {
             stagger(&mut cols[0], since, 1);
@@ -179,32 +188,11 @@ pub fn view(ui: &mut Ui, d: Option<&Dashboard>, x: &Extras, acc: Accent, go: &mu
 /// Hoje without the board: the conversation first, then the day (agenda and tasks), then the machine and the music.
 fn personal(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>, since: f32) {
     let w = ui.available_width();
-    if w > 1100.0 {
-        let gap = 18.0;
-        let (a, b) = ((w - 2.0 * gap) * 0.3, (w - 2.0 * gap) * 0.4);
-        let c = w - 2.0 * gap - a - b;
-        ui.horizontal_top(|ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            ui.allocate_ui_with_layout(vec2(a, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(a);
-                stagger(ui, since, 1);
-                conversations(ui, x, acc, go);
-            });
-            ui.allocate_ui_with_layout(vec2(b, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(b);
-                stagger(ui, since, 2);
-                focus(ui, x, acc, go);
-                ui.add_space(14.0);
-                todos(ui, x, acc, go);
-            });
-            ui.allocate_ui_with_layout(vec2(c, 0.0), Layout::top_down(Align::Min), |ui| {
-                ui.set_width(c);
-                stagger(ui, since, 3);
-                telemetry(ui, x, acc, go);
-                ui.add_space(14.0);
-                music(ui, x, acc, go);
-            });
-        });
+    let e = |f: fn(&mut Ui, &Extras, Accent, &mut Option<View>)| -> Block<'_> { Box::new(move |ui: &mut Ui, go: &mut Option<View>| f(ui, x, acc, go)) };
+    if w >= 1800.0 {
+        masonry(ui, since, &[0.28, 0.28, 0.22, 0.22], vec![vec![e(conversations)], vec![e(focus), e(todos)], vec![e(telemetry)], vec![e(music)]], go);
+    } else if w > 1100.0 {
+        masonry(ui, since, &[0.3, 0.4, 0.3], vec![vec![e(conversations)], vec![e(focus), e(todos)], vec![e(telemetry), e(music)]], go);
     } else if w > 700.0 {
         ui.columns(2, |cols| {
             stagger(&mut cols[0], since, 1);
@@ -619,11 +607,26 @@ fn work(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<Vie
     if !x.on("trabalho") {
         return;
     }
-    // Mine: returned by QA first, then In Progress, then Planned.
+    if ui.available_width() > 760.0 {
+        ui.columns(2, |cols| {
+            mine(&mut cols[0], d, x, acc, go);
+            available(&mut cols[1], d, x, acc, go);
+        });
+    } else {
+        mine(ui, d, x, acc, go);
+        ui.add_space(12.0);
+        available(ui, d, x, acc, go);
+    }
+}
+
+/// O meu trabalho: returned by QA first, then In Progress, then Planned.
+fn mine(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("trabalho") {
+        return;
+    }
     let mut mine: Vec<&Item> = d.now.iter().collect();
     mine.sort_by_key(|i| (i.back.is_none(), i.column != "In Progress"));
-    let two = ui.available_width() > 760.0;
-    let mine_block = |ui: &mut Ui, go: &mut Option<View>| {
+    {
         heading(ui, &format!("O meu trabalho · {}", mine.len()), acc, Some(View::Now), go);
         panel(ui, acc, |ui| {
             if mine.is_empty() {
@@ -649,9 +652,16 @@ fn work(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<Vie
                 });
             }
         });
-    };
+    }
+}
+
+/// Disponível: the free Refined items, in backlog order.
+fn available(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<View>) {
+    if !x.on("trabalho") {
+        return;
+    }
     let available: Vec<&Item> = d.refined.iter().take(6).collect();
-    let free_block = |ui: &mut Ui, go: &mut Option<View>| {
+    {
         heading(ui, &format!("Disponível · {}", d.refined.len()), acc, Some(View::Refined), go);
         panel(ui, acc, |ui| {
             if available.is_empty() {
@@ -679,17 +689,35 @@ fn work(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<Vie
                 ui.label(RichText::new("Ainda tens trabalho teu: o Refined fica para depois dele.").small().color(theme::FAINT));
             }
         });
-    };
-    if two {
-        ui.columns(2, |cols| {
-            mine_block(&mut cols[0], go);
-            free_block(&mut cols[1], go);
-        });
-    } else {
-        mine_block(ui, go);
-        ui.add_space(12.0);
-        free_block(ui, go);
     }
+}
+
+type Block<'a> = Box<dyn FnOnce(&mut Ui, &mut Option<View>) + 'a>;
+
+/// Wide screens: columns side by side, each a stack of blocks, so a short block does not leave a hole beside a tall
+/// one. A block turned off (or with nothing to show) takes no room. `fracs`: each column's share of the width.
+fn masonry(ui: &mut Ui, since: f32, fracs: &[f32], cols: Vec<Vec<Block<'_>>>, go: &mut Option<View>) {
+    let gap = 18.0;
+    let spacing = ui.spacing().item_spacing;
+    let usable = ui.available_width() - gap * (fracs.len() as f32 - 1.0);
+    ui.horizontal_top(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        for (i, (frac, blocks)) in fracs.iter().zip(cols).enumerate() {
+            let w = usable * frac;
+            ui.allocate_ui_with_layout(vec2(w, 0.0), Layout::top_down(Align::Min), |ui| {
+                ui.set_width(w);
+                ui.spacing_mut().item_spacing = spacing;
+                stagger(ui, since, i + 1);
+                for block in blocks {
+                    let top = ui.cursor().min.y;
+                    block(ui, go);
+                    if ui.cursor().min.y > top + 1.0 {
+                        ui.add_space(14.0);
+                    }
+                }
+            });
+        }
+    });
 }
 
 fn separator(ui: &mut Ui, acc: Accent) {
@@ -750,17 +778,42 @@ fn media_button(ui: &mut Ui, icon: &str, big: bool, acc: Accent) -> egui::Respon
     resp
 }
 
-fn music(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
-    if !x.on("musica") {
+fn music(ui: &mut Ui, x: &Extras, acc: Accent, _go: &mut Option<View>) {
+    // In its own window (settings.music_window) the block leaves Hoje.
+    if !x.on("musica") || crate::settings::load().music_window {
         return;
     }
+    if heading_action(ui, "Música", acc, "Janela", "Põe a música numa janela pequena, sempre por cima das outras") {
+        crate::app::post(crate::app::AppEvent::MusicWindow(true));
+    }
+    panel(ui, acc, |ui| player(ui, &x.music, &x.favorites, acc, false));
+}
+
+/// Section title with a small action on the right (instead of the line running to the edge).
+fn heading_action(ui: &mut Ui, text: &str, acc: Accent, action: &str, tip: &str) -> bool {
+    let mut clicked = false;
+    ui.horizontal(|ui| {
+        ui_kit::diamond(ui, true, acc.main, 3.5);
+        ui.label(RichText::new(text.to_uppercase()).font(display(12.5)).color(acc.light).extra_letter_spacing(2.2));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let r = ui.add(egui::Button::new(RichText::new(action.to_uppercase()).font(display(10.5)).extra_letter_spacing(1.0).color(theme::MUTED)).fill(Color32::TRANSPARENT).stroke(Stroke::new(1.0, theme::alpha(acc.main, 0.25))).corner_radius(CornerRadius::same(3)).small());
+            clicked = r.on_hover_text(tip).clicked();
+            let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::hover());
+            ui.painter().line_segment([pos2(line.left() + 6.0, line.center().y), pos2(line.right() - 6.0, line.center().y)], Stroke::new(1.0, theme::alpha(acc.main, 0.25)));
+        });
+    });
+    ui.add_space(4.0);
+    clicked
+}
+
+/// What is playing, with the controls: in the Música block of Hoje and in the music window (`compact`: no
+/// playlists, a smaller cover).
+pub fn player(ui: &mut Ui, m: &crate::music::NowPlaying, favorites: &[(String, String)], acc: Accent, compact: bool) {
     use crate::{
         app::{post, AppEvent},
         music::{clock, open_app, Cmd},
     };
-    heading(ui, "Música", acc, None, go);
-    panel(ui, acc, |ui| {
-        let m = &x.music;
+    {
         if m.title.is_empty() {
             ui.label(RichText::new("Nada a tocar. Põe música no Spotify ou no Apple Music e controlas daqui.").color(theme::MUTED));
             ui.add_space(4.0);
@@ -775,7 +828,7 @@ fn music(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
         } else {
             ui.horizontal(|ui| {
                 // Album art, kept as a texture until the track changes; a drawn disc when there is none.
-                let side = 64.0;
+                let side = if compact { 48.0 } else { 64.0 };
                 let (rect, _) = ui.allocate_exact_size(vec2(side, side), Sense::hover());
                 let key = egui::Id::unique("music-cover");
                 let tex = match &m.cover {
@@ -804,11 +857,32 @@ fn music(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
                         p.circle_filled(rect.center(), 4.0, acc.light);
                     }
                 }
-                ui.vertical(|ui| {
-                    ui.add(egui::Label::new(RichText::new(&m.title).strong().color(theme::BRIGHT)).truncate());
-                    ui.add(egui::Label::new(RichText::new(&m.artist).color(theme::MUTED)).truncate());
-                    ui.label(RichText::new(m.app.to_uppercase()).font(display(10.5)).color(acc.light).extra_letter_spacing(1.2));
-                });
+                let texts = |ui: &mut Ui| {
+                    ui.vertical(|ui| {
+                        ui.add(egui::Label::new(RichText::new(&m.title).strong().color(theme::BRIGHT)).truncate());
+                        ui.add(egui::Label::new(RichText::new(&m.artist).color(theme::MUTED)).truncate());
+                        ui.label(RichText::new(m.app.to_uppercase()).font(display(10.5)).color(acc.light).extra_letter_spacing(1.2));
+                    });
+                };
+                if compact {
+                    // The small window: the controls on the cover's row, so it stays short.
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if media_button(ui, "next", false, acc).on_hover_text("Seguinte").clicked() {
+                            post(AppEvent::Music(Cmd::Next));
+                        }
+                        let (icon, tip) = if m.playing { ("pause", "Pausa") } else { ("play", "Tocar") };
+                        if media_button(ui, icon, true, acc).on_hover_text(tip).clicked() {
+                            post(AppEvent::Music(Cmd::Toggle));
+                        }
+                        if media_button(ui, "prev", false, acc).on_hover_text("Anterior").clicked() {
+                            post(AppEvent::Music(Cmd::Previous));
+                        }
+                        ui.add_space(6.0);
+                        ui.with_layout(Layout::left_to_right(Align::Center), texts);
+                    });
+                } else {
+                    texts(ui);
+                }
             });
             ui.add_space(6.0);
             if m.duration > 0.0 {
@@ -826,7 +900,7 @@ fn music(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
                 }
             }
-            ui.horizontal(|ui| {
+            if !compact { ui.horizontal(|ui| {
                 let w = 30.0 + 40.0 + 30.0 + 2.0 * ui.spacing().item_spacing.x;
                 ui.add_space(((ui.available_width() - w) / 2.0).max(0.0));
                 if media_button(ui, "prev", false, acc).on_hover_text("Anterior").clicked() {
@@ -839,18 +913,18 @@ fn music(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
                 if media_button(ui, "next", false, acc).on_hover_text("Seguinte").clicked() {
                     post(AppEvent::Music(Cmd::Next));
                 }
-            });
+            }); }
         }
-        if !x.favorites.is_empty() {
+        if !favorites.is_empty() && !compact {
             ui.add_space(8.0);
             ui.label(RichText::new("PLAYLISTS").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
             ui.horizontal_wrapped(|ui| {
-                for (name, link) in &x.favorites {
+                for (name, link) in favorites {
                     if button(ui, name, false, acc).on_hover_text(link).clicked() {
                         crate::brain::open(link);
                     }
                 }
             });
         }
-    });
+    }
 }

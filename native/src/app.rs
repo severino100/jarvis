@@ -80,6 +80,8 @@ pub enum AppEvent {
     /// Something changed (a notice): just draw a new frame.
     Repaint,
     Music(crate::music::Cmd),
+    /// The music player in its own small window (true) or back on Hoje (false).
+    MusicWindow(bool),
 }
 
 static POST: OnceLock<(Sender<AppEvent>, egui::Context)> = OnceLock::new();
@@ -271,6 +273,7 @@ impl eframe::App for JarvisApp {
                 AppEvent::Show => Self::show_window(ctx),
                 AppEvent::Repaint => {}
                 AppEvent::Music(c) => self.music.send(c),
+                AppEvent::MusicWindow(on) => settings::update(|s| s.music_window = on),
                 AppEvent::Hotkey | AppEvent::Voice => self.voice.toggle(),
                 AppEvent::Refresh => {
                     self.board.refresh();
@@ -312,6 +315,11 @@ impl eframe::App for JarvisApp {
             }
         }
         self.background(ctx);
+        // F11: full screen and back; Esc also leaves it.
+        let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        if ctx.input(|i| i.key_pressed(egui::Key::F11)) || (full && ctx.input(|i| i.key_pressed(egui::Key::Escape))) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+        }
         // Closing the window hides it in the tray; Sair in the tray menu quits.
         if ctx.input(|i| i.viewport().close_requested()) && !self.quitting {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -439,6 +447,7 @@ impl eframe::App for JarvisApp {
         }
         self.chat_windows(&ctx, acc);
         self.voice_panel(&ctx, acc, t);
+        self.music_window(&ctx, acc);
     }
 }
 
@@ -596,6 +605,10 @@ impl JarvisApp {
                     if ui_kit::button(ui, "Definições", false, acc).clicked() {
                         self.view = View::Settings;
                     }
+                    let full = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+                    if fullscreen_button(ui, full, acc).on_hover_text(if full { "Sair do ecrã inteiro (F11 ou Esc)" } else { "Ecrã inteiro (F11)" }).clicked() {
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+                    }
                 });
                 update_box(ui, acc);
                 if dev {
@@ -659,8 +672,10 @@ impl JarvisApp {
         let board = self.board.clone();
         let mut go = None;
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            // Cap at 1600 like the CSS max-width; set_max_width alone would also widen a narrower window.
-            ui.set_max_width(ui.available_width().min(1600.0));
+            // Cap at 1600 like the CSS max-width; set_max_width alone would also widen a narrower window. Hoje takes the
+            // whole width: on a big screen its columns spread out.
+            let cap = if self.view == View::Today { f32::INFINITY } else { 1600.0 };
+            ui.set_max_width(ui.available_width().min(cap));
             match self.view {
                 View::Agenda => return agenda::view(ui, &self.agenda, &mut self.agenda_ui, acc),
                 View::Tasks => return tasks::view(ui, &mut self.tasks_ui, acc),
@@ -930,6 +945,41 @@ impl JarvisApp {
             if !pr_waiting.is_empty() && ui_kit::button(&mut cols[2], "Ver PRs", false, acc).clicked() {
                 *go = Some(View::Prs);
             }
+        });
+    }
+
+    /// The music player in a small window always on top (Definições keep it open across restarts). Closing it, or
+    /// "Voltar ao Hoje", puts the Música block back on Hoje.
+    fn music_window(&mut self, ctx: &egui::Context, acc: theme::Accent) {
+        if !settings::load().music_window {
+            return;
+        }
+        let monitor = ctx.input(|i| i.viewport().monitor_size).unwrap_or(vec2(1920.0, 1080.0));
+        let size = vec2(380.0, 150.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title("Jarvis · música")
+            .with_inner_size(size)
+            .with_min_inner_size([320.0, 140.0])
+            // Bottom right, clear of the taskbar (and of the title bar Windows adds on top).
+            .with_position(pos2(monitor.x - size.x - 24.0, monitor.y - size.y - 120.0))
+            .with_always_on_top();
+        let now = self.music.now();
+        ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("music-window"), builder, |ui, _| {
+            if ui.ctx().input(|i| i.viewport().close_requested()) {
+                post(AppEvent::MusicWindow(false));
+            }
+            egui::CentralPanel::default().frame(Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(14, 10))).show(ui, |ui| {
+                dashboard::player(ui, &now, &[], acc, true);
+                if now.playing {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+                }
+                ui.with_layout(Layout::bottom_up(Align::Max), |ui| {
+                    let back = ui.add(egui::Label::new(RichText::new("Voltar ao Hoje").small().color(theme::FAINT)).sense(Sense::click()));
+                    if back.on_hover_text("Fecha esta janela e põe a música outra vez no Hoje").clicked() {
+                        post(AppEvent::MusicWindow(false));
+                    }
+                });
+            });
         });
     }
 
@@ -1374,6 +1424,25 @@ pub fn claim_in_background(chats: &Chats, board: &Board, chat_id: &str, id: i64)
         Ok(_) => {}
         Err(e) => chats.add_note(&chat_id, &format!("Não consegui atualizar o #{id} no Azure DevOps: {}", e.lines().next().unwrap_or_default()), "error"),
     });
+}
+
+/// A square button with four corner brackets: pointing out (enter full screen) or in (leave it).
+fn fullscreen_button(ui: &mut Ui, full: bool, acc: theme::Accent) -> egui::Response {
+    let (rect, r) = ui.allocate_exact_size(vec2(28.0, 26.0), Sense::click());
+    let h = motion::hover(ui, &r);
+    let p = ui.painter();
+    p.rect(rect, CornerRadius::same(4), theme::alpha(acc.main, 0.03 + 0.1 * h), Stroke::new(1.0, theme::alpha(acc.main, 0.3 + 0.4 * h)), StrokeKind::Inside);
+    let c = theme::mix(theme::TEXT, theme::BRIGHT, h);
+    let box_ = Rect::from_center_size(rect.center(), vec2(12.0, 12.0));
+    let l = 4.0;
+    for (corner, dx, dy) in [(box_.left_top(), 1.0, 1.0), (box_.right_top(), -1.0, 1.0), (box_.left_bottom(), 1.0, -1.0), (box_.right_bottom(), -1.0, -1.0)] {
+        // Out: the bracket hugs the corner; in: it is drawn from the corner inwards, as an arrow pointing in.
+        let at = if full { corner + vec2(dx * l, dy * l) } else { corner };
+        let s = if full { -1.0 } else { 1.0 };
+        p.line_segment([at, at + vec2(dx * l * s, 0.0)], Stroke::new(1.5, c));
+        p.line_segment([at, at + vec2(0.0, dy * l * s)], Stroke::new(1.5, c));
+    }
+    r
 }
 
 /// A new version on GitHub, at the bottom of the menu: "Atualizar" installs it and opens Jarvis again.

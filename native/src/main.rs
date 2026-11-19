@@ -217,7 +217,13 @@ fn main() -> eframe::Result {
     let mut viewport = egui::ViewportBuilder::default()
         .with_title("Jarvis")
         // JARVIS_SHOT_TALL=1: a tall window, to screenshot the whole start screen.
-        .with_inner_size(if std::env::var("JARVIS_SHOT_TALL").is_ok() { [1280.0, 1500.0] } else { [1280.0, 860.0] })
+        // JARVIS_SHOT_SIZE=2560x1400: any size (big screens).
+        .with_inner_size(
+            std::env::var("JARVIS_SHOT_SIZE")
+                .ok()
+                .and_then(|s| s.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?])))
+                .unwrap_or(if std::env::var("JARVIS_SHOT_TALL").is_ok() { [1280.0, 1500.0] } else { [1280.0, 860.0] }),
+        )
         .with_min_inner_size([420.0, 560.0])
         .with_visible(!hidden);
     if let Some((rgba, w, h)) = &icon {
