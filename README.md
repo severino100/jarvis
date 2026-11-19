@@ -34,7 +34,7 @@ Compras feitas fora do Jarvis (créditos extra no ChatGPT ou na conta Google) de
 
 Descarrega o **[Jarvis-Setup.exe](https://github.com/severino100/jarvis/releases/latest/download/Jarvis-Setup.exe)** e abre-o. Não precisa de administrador. Se o Windows avisar ("O Windows protegeu o computador"), carrega em **Mais informações → Executar mesmo assim**: o instalador ainda não tem assinatura digital.
 
-O instalador põe o Jarvis em `%LOCALAPPDATA%\Programs\Jarvis`, descarrega a voz (Whisper e Piper com a voz pt-PT, cerca de 555 MB, das fontes oficiais, com verificação do conteúdo) para `%LOCALAPPDATA%\Jarvis\vendor` se a escolheres, cria os atalhos e liga o arranque com o Windows. No fim mostra o que falta no PC (git, Claude Code, Antigravity, Codex), com o comando e o link para instalar cada um. Para atualizar, abre o instalador novo (a voz já descarregada não volta a descer). Desinstala-se em Definições do Windows → Aplicações.
+O instalador põe o Jarvis em `%LOCALAPPDATA%\Programs\Jarvis`, descarrega a voz (Whisper e Piper com a voz pt-PT, cerca de 555 MB, das fontes oficiais, com verificação do conteúdo) para `%LOCALAPPDATA%\Jarvis\vendor` se a escolheres, cria os atalhos e liga o arranque com o Windows. No fim mostra o que falta no PC (git, Claude Code, Antigravity, Codex), com o comando e o link para instalar cada um. Atualiza-se sozinho: ao arrancar e de 6 em 6 horas vê se há um release novo e, se houver, aparece uma caixa no fundo do menu; carregas em **Instalar** e o Jarvis fecha, instala a versão nova e volta a abrir, com as conversas e as definições como estavam (a voz já descarregada não volta a descer). Desinstala-se em Definições do Windows → Aplicações.
 
 Alternativa sem o instalador, numa janela do PowerShell (`-SemVoz` salta a voz; `-Verificar` só diz o que falta):
 
@@ -58,4 +58,4 @@ Um pacote é uma pasta com um `jarvis.toml` (board, repositórios, convenção d
 
 O código está em [`native/`](native/) e a documentação técnica em [native/README.md](native/README.md). As regras da conversa estão em [`docs/`](docs/). Para compilar: Rust estável e Visual Studio Build Tools 2022 com C++; `cargo build --release` em `native/` e `scripts\install-native.ps1` instala o que compilaste no mesmo sítio que o instalador.
 
-Releases: uma tag `v*` (ou "Run workflow" em Actions → release) compila no Windows e publica o `jarvis.exe` e o `install.ps1` num release do GitHub.
+Cada push e pull request para o `main` compila, corre os testes e compila o instalador (Actions → build). Releases: uma tag `v*` (ou "Run workflow" em Actions → release) compila no Windows e publica o `Jarvis-Setup.exe`, o `jarvis.exe` e o `install.ps1` num release do GitHub; é daí que os Jarvis instalados se atualizam.

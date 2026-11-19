@@ -14,6 +14,8 @@ target\debug\jarvis.exe --dump                       # lê o board uma vez e esc
 target\debug\jarvis.exe --ask claude|gemini|codex "texto" [modelo]  # uma volta de conversa, sem janela
 target\debug\jarvis.exe --voice-test "texto"         # a Piper diz o texto para um WAV e o Whisper lê-o (nada toca)
 target\debug\jarvis.exe --mic-test                   # abre o microfone 1 s e diz o que ouviu
+target\debug\jarvis.exe --update-test                # lê o último release e descarrega o setup, sem o correr
+JARVIS_UPDATE_FROM=0.1.0 ...  # finge ser essa versão e estar instalado (mostra a caixa da versão nova)
 ```
 
 As opções `--…` escrevem na consola só na compilação de debug (a de release não tem consola).
@@ -41,7 +43,11 @@ As regras da conversa estão em `../docs/persona.md` e `../docs/persona-gemini.m
 
 ## Instalar
 
-Quem não compila: `irm https://github.com/severino100/jarvis/releases/latest/download/install.ps1 | iex` (ver o README principal). `scripts/install.ps1` descarrega o `jarvis.exe` do release para `%LOCALAPPDATA%\Programs\Jarvis`, a voz das fontes oficiais (whisper.cpp `b5454`, `ggml-small.bin`, Piper `2023.11.14-2`, voz `pt_PT-tugão-medium` v1.0.0) para `%LOCALAPPDATA%\Jarvis\vendor` (`-SemVoz` salta-a), cria os atalhos "Jarvis" (menu Iniciar e Ambiente de Trabalho) com o AppUserModelID das notificações (`jarvis.desktop`) e põe o arranque com o Windows (`HKCU\...\Run`, com `--hidden`). `-Versao v0.2.0` instala um release concreto; `-Exe <ficheiro>` instala um exe local.
+Tudo fica em `%LOCALAPPDATA%\Programs\Jarvis` (o `jarvis.exe`), a voz em `%LOCALAPPDATA%\Jarvis\vendor` e os dados em `%APPDATA%\Jarvis`, seja qual for o caminho de instalação.
+
+**`Jarvis-Setup.exe`** (o que se passa às pessoas): `installer/jarvis.iss`, Inno Setup 6.5 ou mais recente. Instala só para o utilizador (sem administrador); as tarefas opcionais são a voz (descarregada das fontes oficiais com o hash verificado, só o que ainda falta), o arranque com o Windows e o atalho no Ambiente de Trabalho; o atalho do menu Iniciar leva o AppUserModelID `jarvis.desktop`. No fim, uma página mostra o que falta no PC (git, Claude Code, Antigravity, Codex) com o comando para copiar e o link. Desinstala-se em Definições do Windows → Aplicações. Compilar: `ISCC.exe installer\jarvis.iss` (usa `native\target\release\jarvis.exe`; `/DExePath=<exe>` para outro); a versão do setup vem do `ProductVersion` do exe. Com `/relancar=1` (e `/VERYSILENT`), abre o Jarvis no fim: é assim que a atualização automática o corre.
+
+**`install.ps1`**, alternativa sem o setup: `irm https://github.com/severino100/jarvis/releases/latest/download/install.ps1 | iex` (ver o README principal). O ficheiro é só ASCII (o PowerShell 5.1 lê-o mal de outra forma e um BOM parte o `[scriptblock]::Create`); os acentos do que mostra escrevem-se com marcadores (`{a~}`, `{c,}`…) que a função `Pt` troca. `-Verificar` só diz o que falta. `scripts/install.ps1` descarrega o `jarvis.exe` do release para `%LOCALAPPDATA%\Programs\Jarvis`, a voz das fontes oficiais (whisper.cpp `b5454`, `ggml-small.bin`, Piper `2023.11.14-2`, voz `pt_PT-tugão-medium` v1.0.0) para `%LOCALAPPDATA%\Jarvis\vendor` (`-SemVoz` salta-a), cria os atalhos "Jarvis" (menu Iniciar e Ambiente de Trabalho) com o AppUserModelID das notificações (`jarvis.desktop`) e põe o arranque com o Windows (`HKCU\...\Run`, com `--hidden`). `-Versao v0.2.0` instala um release concreto; `-Exe <ficheiro>` instala um exe local.
 
 Quem compila, depois de `cargo build --release`, num terminal normal:
 
@@ -50,7 +56,22 @@ powershell -ExecutionPolicy Bypass -File ..\scripts\install-native.ps1   # insta
 powershell -ExecutionPolicy Bypass -File ..\scripts\check-native.ps1     # vê o estado
 ```
 
-Release: `.github/workflows/release.yml` corre numa tag `v*` (ou à mão, em Actions → release → Run workflow, com a tag): compila no Windows e publica o `jarvis.exe` e o `install.ps1` num release do GitHub, que é o que o instalador descarrega.
+### Release
+
+`.github/workflows/release.yml` corre numa tag `v*` (ou à mão, em Actions → release → Run workflow, com a tag): compila no Windows, compila o setup e publica um release do GitHub com três ficheiros: `Jarvis-Setup.exe`, `jarvis.exe` (o que o `install.ps1` descarrega) e `install.ps1`. Antes da tag, sobe a `version` no `Cargo.toml`: é ela que o setup e a atualização comparam.
+
+`.github/workflows/build.yml` corre em cada push e pull request para o `main`: `cargo build --release --locked`, `cargo test --locked` e a compilação do setup, para apanhar erros no `.iss`. Não publica nada.
+
+### Atualização automática
+
+`update.rs`: só o Jarvis instalado (o exe em `%LOCALAPPDATA%\Programs\Jarvis`) se atualiza; um compilado a partir do código não. Um minuto depois de arrancar e depois de 6 em 6 horas, lê o último release (`api.github.com/repos/severino100/jarvis/releases/latest`); se for mais novo do que a `version` do `Cargo.toml`, aparece uma caixa no fundo do menu lateral (e em Definições), com uma notificação uma vez por versão. **Instalar** descarrega o `Jarvis-Setup.exe` desse release para a pasta temporária e corre-o com `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /relancar=1`: o Jarvis fecha, o setup instala por cima (com as opções escolhidas da primeira vez) e volta a abri-lo. As conversas e as definições ficam.
+
+Testar:
+
+```powershell
+$env:JARVIS_UPDATE_FROM='0.1.0'; target\debug\jarvis.exe    # finge ser a 0.1.0 e estar instalado: verifica ao fim de 2 s e mostra a caixa
+target\debug\jarvis.exe --update-test                        # lê o último release e descarrega o setup, sem o correr
+```
 
 ## Perfil e pacotes de equipa
 
