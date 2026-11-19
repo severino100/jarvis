@@ -12,6 +12,8 @@ JARVIS_SHOT_VOICE=1 ...       # abre o painel da voz com uma troca de exemplo (s
 JARVIS_SHOT_VIEW=chat-rh ...  # uma conversa de RH de exemplo (com "Guardei" e "Desfeito"), num ficheiro temporário
 JARVIS_SHOT_VIEW=eu ...       # Definições → O meu Jarvis
 JARVIS_SHOT_MODES=rh ...      # finge estes modos (rh, dev ou dev,rh) sem mexer no perfil guardado
+JARVIS_SHOT_NO_LOGIN=1 ...    # mostra os motores instalados como sem sessão iniciada (com Iniciar sessão)
+JARVIS_SHOT_EDIT=1 ...        # abre os rascunhos de email em edição
 JARVIS_DATA_DIR=<pasta> JARVIS_SHOT_VIEW=welcome JARVIS_SHOT_STEP=0..5 ...   # o primeiro arranque, num perfil descartável
 target\debug\jarvis.exe --profile                    # o perfil, o pacote ativo, branches, worktrees e a persona preenchida
 target\debug\jarvis.exe --dump                       # lê o board uma vez e escreve um resumo
@@ -48,7 +50,7 @@ As regras da conversa estão em `../docs/persona*.md` (entram no executável com
 
 ## Modos
 
-`Profile.modes` diz para que a pessoa usa o Jarvis: `dev` (o board, os PRs, as horas e a limpeza) e/ou `rh` (o assistente pessoal de RH). Um perfil antigo sem o campo conta como `["dev"]`. Sem o modo dev, o menu não mostra Agora, PRs, Revisão, Refined, Horas nem Limpeza, a barra lateral não mostra o sprint e o Hoje não espera pelo board (`app::shown`, `dashboard::personal`). Os blocos do Hoje que cada pessoa desliga ficam em `Profile.today_hidden` (chaves de `dashboard::BLOCKS`).
+`Profile.modes` diz para que a pessoa usa o Jarvis: `dev` (o board, os PRs, as horas e a limpeza) e/ou `rh` (o assistente pessoal de RH). Um perfil antigo sem o campo conta como `["dev"]`. Sem o modo dev, o menu não mostra Agora, PRs, Revisão, Refined, Horas nem Limpeza, a barra lateral não mostra o sprint e o Hoje não espera pelo board (`app::shown`, `dashboard::personal`). Os blocos do Hoje que cada pessoa desliga ficam em `Profile.today_hidden` (chaves de `dashboard::BLOCKS`) e os ecrãs que tira do menu em `Profile.menu_hidden` (chaves de `app::menu_entries`; Hoje e Definições ficam sempre).
 
 Cada conversa tem um modo (`Chat.mode`): as de item e de PR são dev; as outras são rh quando o modo RH está ligado (`profile::default_mode`), e com os dois modos escolhe-se por cima da caixa de escrita (muda para uma sessão nova, porque as regras entram no início da sessão). No modo rh o motor arranca em `eu\`, pode ler a pasta da pessoa (`%USERPROFILE%`) em vez dos projetos, o Claude não tem `Bash`, e as regras da equipa vêm de `[guides] persona_rh` do pacote (ou de `persona`, para quem só tem o modo RH).
 
@@ -60,15 +62,20 @@ O que cada pessoa ensina ao seu Jarvis, só neste PC (`eu.rs`):
 | --- | --- |
 | `instrucoes.md` | instruções pessoais escritas pela pessoa (o tom, como assina, o que nunca fazer) |
 | `memoria.md` | uma regra por linha, com a data: `- 2026-11-18: assina os emails como Rita` |
+| `exemplos.md` | exemplos de estilo: a versão final dos rascunhos de email que a pessoa editou antes de os levar (só os 5 mais recentes) |
 | `skills\` | skills pessoais do Claude Code; a pasta é um plugin (`.claude-plugin\plugin.json`) e entra com `--plugin-dir`, como o pacote ativo (comandos `/eu:<skill>`) |
 
 As instruções e a memória juntam-se a todas as conversas (dev, rh e geral) depois das regras do Jarvis e da equipa, com a indicação explícita de que essas ficam por cima: a confirmação antes de enviar, criar ou apagar e as regras de dados pessoais não se desligam (`eu::prompt_block`). No Claude vão no `--append-system-prompt` de cada volta; no Antigravity e no Codex em cada volta, para uma regra nova contar logo na seguinte. Tudo se vê e muda em Definições → O meu Jarvis.
 
 **`[[LEMBRAR: <regra>]]`**: quando a pessoa diz "lembra-te que…" ou corrige uma preferência, a IA termina a resposta com esta linha (as personas explicam-no), como já faz com `[[IMPLEMENTAR:…]]` e `[[ABRIR_NO_CLAUDE]]`. O `chat.rs` não a mostra (nem enquanto a resposta chega), grava a regra em `memoria.md` (a mesma regra só uma vez) e mostra na conversa "Guardei: <regra>" com "Desfazer". Teste: `jarvis.exe --ask claude "lembra-te que assino sempre como Rita"` e depois outra pergunta.
 
+**`[[SKILL: nome | quando usar]] … [[/SKILL]]`**: quando a pessoa pede um atalho ("a partir de agora, quando eu disser *triagem*, faz…"), a IA escreve as instruções neste bloco. O Jarvis grava-as em `eu\skills\<nome>\SKILL.md` (o comando `/eu:<nome>`; `eu::save_skill`), esconde o bloco e mostra "Criei o teu comando" com "Desfazer" (apaga o comando, ou volta à versão anterior se já existia). Os atalhos entram também em texto nas instruções, porque o Antigravity e o Codex não carregam skills do Claude Code.
+
+**Exemplos de estilo**: o cartão de um rascunho `[[EMAIL]]` tem "Editar". Quando uma versão editada sai (Abrir no Outlook ou Copiar), o corpo final vai para `exemplos.md` (`eu::add_example`) e as conversas seguintes recebem-no como exemplo de tom, comprimento e assinatura, com a indicação de nunca reutilizar os nomes nem os dados. Definições → O meu Jarvis mostra-os, com Apagar. Testes: `cargo test` (em `eu.rs`).
+
 ## Primeiro arranque
 
-Sem `perfil.json`, o Jarvis abre um assistente curto (`welcome.rs`): o nome, para que o usa (RH, dev ou os dois), a conta de IA (verifica se o Claude Code, o Antigravity e o Codex estão instalados, com o comando e o link para o que falta, `requisitos.rs`; a sessão iniciada só se vê na primeira conversa, que diz como a iniciar), o pacote da equipa (opcional), os blocos do Hoje e uma primeira instrução pessoal. "Saltar" fica com o que já foi escolhido.
+Sem `perfil.json`, o Jarvis abre um assistente curto (`welcome.rs`): o nome, para que o usa (RH, dev ou os dois), a conta de IA (verifica se o Claude Code, o Antigravity e o Codex estão instalados, com o comando e o link para o que falta, `requisitos.rs`, e se cada motor tem a conta iniciada, sem gastar utilização: `claude auth status`, `codex login status` e o login Google guardado do Antigravity (`brain::signed_in`). Um motor sem sessão aparece a âmbar com "Iniciar sessão", que abre um terminal com o comando de login), o pacote da equipa (opcional), os blocos do Hoje e uma primeira instrução pessoal. "Saltar" fica com o que já foi escolhido.
 
 ## Instalar
 
