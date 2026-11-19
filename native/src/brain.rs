@@ -955,10 +955,8 @@ pub fn hide_partial(text: &str) -> String {
     if let Some(i) = t.find("[[SKILL:") {
         t.truncate(i);
     }
-    if let Some(i) = t.rfind("[[") {
-        if !t[i..].contains("]]") {
-            t.truncate(i);
-        }
+    if let Some(i) = t.rfind("[[").filter(|i| !t[*i..].contains("]]")) {
+        t.truncate(i);
     }
     t
 }
