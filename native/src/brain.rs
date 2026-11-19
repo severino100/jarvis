@@ -924,7 +924,43 @@ pub fn read_marks(text: &str) -> (bool, Option<String>) {
 }
 
 pub fn strip_marks(text: &str) -> String {
-    mark_re().replace_all(text, "").trim_end().to_owned()
+    let text = skill_re().replace_all(text, "");
+    mark_re().replace_all(&text, "").trim_end().to_owned()
+}
+
+/// A personal shortcut the reply asked Jarvis to create: [[SKILL: nome | quando usar]] instructions [[/SKILL]].
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewSkill {
+    pub name: String,
+    pub about: String,
+    pub body: String,
+}
+
+fn skill_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)\[\[SKILL:\s*([^\]\n|]+)\|([^\]\n]*)\]\](.*?)\[\[/SKILL\]\]").unwrap())
+}
+
+pub fn read_skills(text: &str) -> Vec<NewSkill> {
+    skill_re()
+        .captures_iter(text)
+        .map(|c| NewSkill { name: c[1].trim().to_owned(), about: c[2].trim().to_owned(), body: c[3].trim().to_owned() })
+        .filter(|s| !s.name.is_empty() && !s.body.is_empty())
+        .collect()
+}
+
+/// While a reply is still arriving: a mark or a [[SKILL]] block that has not closed yet is not shown.
+pub fn hide_partial(text: &str) -> String {
+    let mut t = strip_marks(text);
+    if let Some(i) = t.find("[[SKILL:") {
+        t.truncate(i);
+    }
+    if let Some(i) = t.rfind("[[") {
+        if !t[i..].contains("]]") {
+            t.truncate(i);
+        }
+    }
+    t
 }
 
 /// Claude CLI errors that mean "no usage left right now"; anything else is a real error and stays with Claude.

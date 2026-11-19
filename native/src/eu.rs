@@ -122,6 +122,60 @@ pub fn set_instructions(text: &str) {
     let _ = fs::write(instructions_file(), if t.is_empty() { String::new() } else { format!("{t}\n") });
 }
 
+/// A skill folder name: lower case letters, digits and hyphens ("Triagem rápida" → "triagem-rapida").
+pub fn slug(name: &str) -> String {
+    let plain: String = name
+        .trim()
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ã' => 'a',
+            'é' | 'ê' => 'e',
+            'í' => 'i',
+            'ó' | 'ô' | 'õ' => 'o',
+            'ú' => 'u',
+            'ç' => 'c',
+            c if c.is_ascii_alphanumeric() => c,
+            _ => '-',
+        })
+        .collect();
+    plain.split('-').filter(|p| !p.is_empty()).collect::<Vec<_>>().join("-").chars().take(40).collect()
+}
+
+/// Writes a personal skill (eu\skills\<slug>\SKILL.md). Returns the slug and the SKILL.md it replaced, if any, so
+/// "Desfazer" can put it back.
+pub fn save_skill(name: &str, about: &str, body: &str) -> Option<(String, Option<String>)> {
+    let s = slug(name);
+    if s.is_empty() || body.trim().is_empty() {
+        return None;
+    }
+    ensure();
+    let d = skills_dir().join(&s);
+    let file = d.join("SKILL.md");
+    let previous = fs::read_to_string(&file).ok();
+    fs::create_dir_all(&d).ok()?;
+    let about = about.trim().replace('\n', " ").replace('"', "'");
+    fs::write(&file, format!("---\nname: {s}\ndescription: \"{about}\"\n---\n\n{}\n", body.trim())).ok()?;
+    Some((s, previous))
+}
+
+/// Undoes `save_skill`: the previous SKILL.md comes back, or the new skill goes.
+pub fn undo_skill(slug: &str, previous: Option<&str>) {
+    if slug.is_empty() || slug.contains(['/', '\\', '.']) {
+        return;
+    }
+    let d = skills_dir().join(slug);
+    match previous {
+        Some(p) => {
+            let _ = fs::write(d.join("SKILL.md"), p);
+        }
+        None => {
+            let _ = fs::remove_file(d.join("SKILL.md"));
+            let _ = fs::remove_dir(&d);
+        }
+    }
+}
+
 /// The personal skills: (name, what it does from its SKILL.md, folder).
 pub fn skills() -> Vec<(String, String, PathBuf)> {
     let mut out: Vec<(String, String, PathBuf)> = fs::read_dir(skills_dir())
@@ -154,8 +208,8 @@ pub fn forget(text: &str) -> bool {
 /// What goes into every conversation after Jarvis's rules and the team's: the personal instructions and the memory.
 /// Empty when there is neither.
 pub fn prompt_block() -> String {
-    let (ins, rules, examples) = (instructions(), rules(), examples());
-    if ins.is_empty() && rules.is_empty() && examples.is_empty() {
+    let (ins, rules, examples, shortcuts) = (instructions(), rules(), examples(), skills());
+    if ins.is_empty() && rules.is_empty() && examples.is_empty() && shortcuts.is_empty() {
         return String::new();
     }
     let name = crate::profile::name();
@@ -168,6 +222,18 @@ pub fn prompt_block() -> String {
     if !rules.is_empty() {
         let list: String = rules.iter().map(|r| if r.date.is_empty() { format!("\n- {}", r.text) } else { format!("\n- {} (desde {})", r.text, r.date) }).collect();
         out.push_str(&format!("\n\nMemória (o que {name} te pediu para lembrares):{list}"));
+    }
+    // The shortcuts in words too: Antigravity and Codex do not load Claude Code skills.
+    if !shortcuts.is_empty() {
+        let list: String = shortcuts
+            .iter()
+            .map(|(n, about, d)| {
+                let body = fs::read_to_string(d.join("SKILL.md")).unwrap_or_default();
+                let body = body.splitn(3, "---").nth(2).unwrap_or(&body).trim().chars().take(1500).collect::<String>();
+                format!("\n\n--- {n}: {about} ---\n{body}")
+            })
+            .collect();
+        out.push_str(&format!("\n\nAtalhos pessoais de {name} (comandos que {name} criou; quando os usar, segue as instruções de cada um):{list}"));
     }
     if !examples.is_empty() {
         let list: String = examples.iter().map(|e| format!("\n\n--- {} ---\n{}", if e.subject.is_empty() { "(sem assunto)" } else { &e.subject }, e.body)).collect();
@@ -275,6 +341,32 @@ mod tests {
         assert_eq!(e.first().unwrap().body, "corpo 1");
         remove_example(0);
         assert_eq!(examples().first().unwrap().body, "corpo 2");
+        // A [[SKILL]] block from a reply becomes a personal skill; "Desfazer" takes it away again.
+        let reply = "Feito.
+
+[[SKILL: Triagem rápida | Quando disser \"triagem\": avalia os perfis]]
+1. Lê a vaga.
+2. Faz a tabela.
+[[/SKILL]]
+
+Usa assim.";
+        let s = crate::brain::read_skills(reply);
+        assert_eq!(s.len(), 1);
+        assert_eq!(crate::brain::strip_marks(reply), "Feito.
+
+
+
+Usa assim.");
+        let (slug, replaced) = save_skill(&s[0].name, &s[0].about, &s[0].body).unwrap();
+        assert_eq!((slug.as_str(), replaced.is_none()), ("triagem-rapida", true));
+        assert_eq!(skills().len(), 1);
+        assert!(prompt_block().contains("2. Faz a tabela."));
+        assert_eq!(crate::brain::hide_partial("Ok.
+[[SKILL: x | y]]
+1. a"), "Ok.
+");
+        undo_skill(&slug, None);
+        assert!(skills().is_empty());
         let _ = fs::remove_dir_all(&d);
     }
 }

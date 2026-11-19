@@ -29,6 +29,8 @@ pub enum Action {
     SetMode(String, String),
     /// "Desfazer" on a remembered rule: conversation, message
     Forget(String, String),
+    /// "Desfazer" on a personal command the Jarvis created: conversation, message
+    UndoSkill(String, String),
     /// "Começar de novo" in the Jarvis page: a new free conversation (the old one stays in Chat).
     FreshJarvis,
 }
@@ -256,13 +258,8 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
             who(ui, &format!("JARVIS · {}", crate::chat::engine_label(crate::chat::msg_engine(m)).to_uppercase()), acc.main);
             // The marks for Jarvis ([[LEMBRAR: …]] and the others) are not for the person, also while streaming.
             if m.live {
-                let t = crate::brain::strip_marks(&m.text);
-                // A mark still arriving ("[[LEMB…") is not shown either.
-                let t = match t.rfind("[[") {
-                    Some(i) if !t[i..].contains("]]") => &t[..i],
-                    _ => &t,
-                };
-                markdown::show(ui, t, acc);
+                // A mark or a [[SKILL]] block still arriving is not shown either.
+                markdown::show(ui, &crate::brain::hide_partial(&m.text), acc);
             } else {
                 // An [[EMAIL]] block is a draft card; the rest is text.
                 for (i, part) in crate::brain::split_emails(&m.text).into_iter().enumerate() {
@@ -283,7 +280,7 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
             });
         }
         "remembered" => {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui_kit::diamond(ui, true, acc.main, 3.5);
                 ui.add(egui::Label::new(RichText::new(format!("Guardei: {}", m.text)).size(12.5).color(theme::MUTED)).wrap());
                 if ui.add(egui::Label::new(RichText::new("Desfazer").size(12.5).underline().color(acc.light)).sense(Sense::click())).on_hover_text("Tira esta regra da memória (Definições → O meu Jarvis)").clicked() {
@@ -291,8 +288,25 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
                 }
             });
         }
+        "skill" => {
+            ui.horizontal_wrapped(|ui| {
+                ui_kit::diamond(ui, true, acc.main, 3.5);
+                let what = if m.replaced.is_some() { "Atualizei o teu comando" } else { "Criei o teu comando" };
+                ui.add(egui::Label::new(RichText::new(format!("{what} {}", m.text)).size(12.5).color(theme::MUTED)).wrap());
+                if ui.add(egui::Label::new(RichText::new("Desfazer").size(12.5).underline().color(acc.light)).sense(Sense::click())).on_hover_text("Apaga este comando (ou volta à versão anterior)").clicked() {
+                    acts.push(Action::UndoSkill(c.id.clone(), m.id.clone()));
+                }
+            });
+        }
+        "skill-undone" => {
+            ui.horizontal_wrapped(|ui| {
+                ui_kit::diamond(ui, false, theme::FAINT, 3.5);
+                ui.label(RichText::new("Desfeito:").size(12.5).color(theme::FAINT));
+                ui.add(egui::Label::new(RichText::new(&m.text).size(12.5).strikethrough().color(theme::FAINT)).wrap());
+            });
+        }
         "forgotten" => {
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 ui_kit::diamond(ui, false, theme::FAINT, 3.5);
                 ui.label(RichText::new("Desfeito:").size(12.5).color(theme::FAINT));
                 ui.add(egui::Label::new(RichText::new(&m.text).size(12.5).strikethrough().color(theme::FAINT)).wrap());

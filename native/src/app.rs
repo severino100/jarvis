@@ -1168,6 +1168,7 @@ impl JarvisApp {
                 Action::SetEngine(id, engine, model) => self.chats.set_engine(&id, engine, model),
                 Action::SetMode(id, mode) => self.chats.set_mode(&id, mode),
                 Action::Forget(id, msg) => self.chats.undo_remember(&id, &msg),
+                Action::UndoSkill(id, msg) => self.chats.undo_skill(&id, &msg),
                 Action::Compact(id) => {
                     self.chats.compact(&id, chat::engine());
                 }
