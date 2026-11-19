@@ -1,6 +1,6 @@
 # Jarvis para Recursos Humanos — plano
 
-Estado: proposta. Nada disto está implementado.
+Estado: a fase 0 (o assistente pessoal) está feita; o resto é proposta.
 
 ## Objetivo
 
@@ -189,7 +189,16 @@ As skills do pacote de RH (avaliar perfil, escrever descrição de vaga, gerar p
 
 ## Fases
 
-0. **O assistente pessoal.** Instalador sem compilar e primeiro arranque guiado; persona de RH; conversa geral; instruções pessoais, memória ("lembra-te que…") com ecrã para ver e apagar; escolher o que aparece no Hoje e no menu.
+0. **O assistente pessoal.** ✅ Feita. Instalador sem compilar e primeiro arranque guiado; persona de RH; conversa geral; instruções pessoais, memória ("lembra-te que…") com ecrã para ver e apagar; escolher o que aparece no Hoje e no menu.
+
+   O que ficou e o que ficou diferente do plano (detalhes técnicos em [native/README.md](../native/README.md#modos)):
+   - **Modos** no perfil (`modes = ["dev", "rh"]`, por omissão `["dev"]`). Sem o modo dev, o menu e o Hoje só mostram o que não é do board. Cada conversa tem o seu modo; com os dois ligados escolhe-se por conversa. Escolher que **ecrãs** ficam no menu, além do modo, ficou por fazer: só os blocos do Hoje são escolha de cada pessoa.
+   - **Persona de RH** em `docs/persona-rh.md` (e `persona-rh-gemini.md` para o Antigravity), com as regras de RGPD e do LinkedIn. No modo RH a IA não tem shell e lê a pasta da pessoa, não os projetos. O pacote de RH pode trazer regras próprias em `[guides] persona_rh`.
+   - **Pasta pessoal** `%APPDATA%\Jarvis\eu\`: `instrucoes.md`, `memoria.md` e `skills\` (um plugin do Claude Code, comandos `/eu:<skill>`). Entram em todas as conversas, abaixo das regras do Jarvis e da equipa.
+   - **Memória** com `[[LEMBRAR: regra]]` no fim da resposta: o Jarvis grava-a e mostra "Guardei: …" com "Desfazer". Ecrã **Definições → O meu Jarvis** para os modos, os blocos do Hoje, as instruções, a memória (editar e apagar) e as skills.
+   - **Primeiro arranque** guiado: nome, modos, conta de IA (vê o que está instalado e dá o link do que falta), pacote da equipa, blocos do Hoje e uma primeira instrução. Não verifica se a sessão do `claude`/`agy` está iniciada: isso diz-se na primeira conversa.
+   - **Conversa geral** (`docs/persona-geral.md`, entrada Jarvis no menu) entrou no main noutra sessão, com tarefas e emails.
+   - Ficou para depois: **exemplos de estilo** (guardar a versão final de um rascunho editado) e a IA **criar skills pessoais** a partir de "a partir de agora, quando eu disser…" (hoje cria-se a pasta da skill à mão ou pedindo à IA que a escreva em `eu\skills`).
 1. **Vagas, pedidos e ligações.** Ecrã Contas (email e LinkedIn); modelo de dados e gravação local; ecrã Vagas (criar, editar, fechar); `mail.ps1` a ler pedidos; "já há vaga?" e rascunho da descrição; importação de vagas do Excel; persona de RH.
 2. **Candidatos e pesquisa.** Pesquisa booleana gerada; importar perfil (texto, link ou PDF); nota explicada; aviso de duplicados; ecrã Candidato.
 3. **Contactos e respostas.** Mensagens personalizadas; registo de contactos; deteção de respostas (notificações do Recruiter e emails diretos); seguimentos; ecrã Contactos. No fim desta fase já se responde a "dos de ontem, quantos responderam".

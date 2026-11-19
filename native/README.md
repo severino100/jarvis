@@ -9,9 +9,13 @@ JARVIS_SHOT_RS=<ficheiro.png> JARVIS_SHOT_VIEW=today|now|review|refined|hours|ch
 JARVIS_SHOT_DELAY=9 ...       # espera mais antes da captura (a agenda e os PRs demoram uns segundos)
 JARVIS_SHOT_VIEW=chat JARVIS_SHOT_WINDOW=1 ...   # vista Chat com uma conversa de exemplo, também numa janela à parte
 JARVIS_SHOT_VOICE=1 ...       # abre o painel da voz com uma troca de exemplo (sem microfone)
+JARVIS_SHOT_VIEW=chat-rh ...  # uma conversa de RH de exemplo (com "Guardei" e "Desfeito"), num ficheiro temporário
+JARVIS_SHOT_VIEW=eu ...       # Definições → O meu Jarvis
+JARVIS_SHOT_MODES=rh ...      # finge estes modos (rh, dev ou dev,rh) sem mexer no perfil guardado
+JARVIS_DATA_DIR=<pasta> JARVIS_SHOT_VIEW=welcome JARVIS_SHOT_STEP=0..5 ...   # o primeiro arranque, num perfil descartável
 target\debug\jarvis.exe --profile                    # o perfil, o pacote ativo, branches, worktrees e a persona preenchida
 target\debug\jarvis.exe --dump                       # lê o board uma vez e escreve um resumo
-target\debug\jarvis.exe --ask claude|gemini|codex "texto" [modelo]  # uma volta de conversa, sem janela
+target\debug\jarvis.exe --ask claude|gemini|codex "texto" [modelo]  # uma volta de conversa, sem janela (JARVIS_ASK_MODE=dev|rh|geral; grava os [[LEMBRAR:]])
 target\debug\jarvis.exe --voice-test "texto"         # a Piper diz o texto para um WAV e o Whisper lê-o (nada toca)
 target\debug\jarvis.exe --mic-test                   # abre o microfone 1 s e diz o que ouviu
 target\debug\jarvis.exe --update-test                # lê o último release e descarrega o setup, sem o correr
@@ -28,7 +32,8 @@ O `jarvis.exe` não precisa de nada ao lado: os guias genéricos (`docs/preparac
 
 | Ficheiro | O quê |
 | --- | --- |
-| `perfil.json` | nome, pasta dos projetos, pacotes de equipa e o token do board cifrado com a DPAPI do Windows |
+| `perfil.json` | nome, modos (`dev`, `rh`), blocos escondidos do Hoje, pasta dos projetos, pacotes de equipa e o token do board cifrado com a DPAPI do Windows |
+| `eu\` | o que a pessoa ensina ao Jarvis (ver abaixo) |
 | `packs\` | os pacotes de equipa clonados do git |
 | `state-native.json` | definições e o que já foi visto no board e nos PRs |
 | `chats-native.json` | conversas |
@@ -39,7 +44,31 @@ O `jarvis.exe` não precisa de nada ao lado: os guias genéricos (`docs/preparac
 
 A voz fica em `%LOCALAPPDATA%\Jarvis\vendor` (local, para os ~600 MB não irem no perfil móvel do Windows).
 
-As regras da conversa estão em `../docs/persona.md` e `../docs/persona-gemini.md` (entram no executável com `include_str!`; ao mudá-las, recompila).
+As regras da conversa estão em `../docs/persona*.md` (entram no executável com `include_str!`; ao mudá-las, recompila): `persona.md` e `persona-gemini.md` para o modo dev, `persona-rh.md` e `persona-rh-gemini.md` para o modo RH, `persona-geral.md` para a conversa livre.
+
+## Modos
+
+`Profile.modes` diz para que a pessoa usa o Jarvis: `dev` (o board, os PRs, as horas e a limpeza) e/ou `rh` (o assistente pessoal de RH). Um perfil antigo sem o campo conta como `["dev"]`. Sem o modo dev, o menu não mostra Agora, PRs, Revisão, Refined, Horas nem Limpeza, a barra lateral não mostra o sprint e o Hoje não espera pelo board (`app::shown`, `dashboard::personal`). Os blocos do Hoje que cada pessoa desliga ficam em `Profile.today_hidden` (chaves de `dashboard::BLOCKS`).
+
+Cada conversa tem um modo (`Chat.mode`): as de item e de PR são dev; as outras são rh quando o modo RH está ligado (`profile::default_mode`), e com os dois modos escolhe-se por cima da caixa de escrita (muda para uma sessão nova, porque as regras entram no início da sessão). No modo rh o motor arranca em `eu\`, pode ler a pasta da pessoa (`%USERPROFILE%`) em vez dos projetos, o Claude não tem `Bash`, e as regras da equipa vêm de `[guides] persona_rh` do pacote (ou de `persona`, para quem só tem o modo RH).
+
+## A pasta "eu" (`%APPDATA%\Jarvis\eu`)
+
+O que cada pessoa ensina ao seu Jarvis, só neste PC (`eu.rs`):
+
+| Ficheiro | O quê |
+| --- | --- |
+| `instrucoes.md` | instruções pessoais escritas pela pessoa (o tom, como assina, o que nunca fazer) |
+| `memoria.md` | uma regra por linha, com a data: `- 2026-11-18: assina os emails como Rita` |
+| `skills\` | skills pessoais do Claude Code; a pasta é um plugin (`.claude-plugin\plugin.json`) e entra com `--plugin-dir`, como o pacote ativo (comandos `/eu:<skill>`) |
+
+As instruções e a memória juntam-se a todas as conversas (dev, rh e geral) depois das regras do Jarvis e da equipa, com a indicação explícita de que essas ficam por cima: a confirmação antes de enviar, criar ou apagar e as regras de dados pessoais não se desligam (`eu::prompt_block`). No Claude vão no `--append-system-prompt` de cada volta; no Antigravity e no Codex em cada volta, para uma regra nova contar logo na seguinte. Tudo se vê e muda em Definições → O meu Jarvis.
+
+**`[[LEMBRAR: <regra>]]`**: quando a pessoa diz "lembra-te que…" ou corrige uma preferência, a IA termina a resposta com esta linha (as personas explicam-no), como já faz com `[[IMPLEMENTAR:…]]` e `[[ABRIR_NO_CLAUDE]]`. O `chat.rs` não a mostra (nem enquanto a resposta chega), grava a regra em `memoria.md` (a mesma regra só uma vez) e mostra na conversa "Guardei: <regra>" com "Desfazer". Teste: `jarvis.exe --ask claude "lembra-te que assino sempre como Rita"` e depois outra pergunta.
+
+## Primeiro arranque
+
+Sem `perfil.json`, o Jarvis abre um assistente curto (`welcome.rs`): o nome, para que o usa (RH, dev ou os dois), a conta de IA (verifica se o Claude Code, o Antigravity e o Codex estão instalados, com o comando e o link para o que falta, `requisitos.rs`; a sessão iniciada só se vê na primeira conversa, que diz como a iniciar), o pacote da equipa (opcional), os blocos do Hoje e uma primeira instrução pessoal. "Saltar" fica com o que já foi escolhido.
 
 ## Instalar
 
