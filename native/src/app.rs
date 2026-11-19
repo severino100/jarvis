@@ -530,49 +530,65 @@ impl JarvisApp {
             }
             ui.add_space(10.0);
 
-            // The active highlight is one shape that slides between entries; its slot is reserved under them.
-            let highlight = ui.painter().add(egui::Shape::Noop);
-            let mut active_rect = None;
-            for (view, label) in NAV.into_iter().filter(|(v, _)| shown(*v)) {
-                let count = d.and_then(|d| match view {
-                    View::Now => Some(d.now.len()),
-                    View::Review => Some(d.review.len()),
-                    View::Refined => Some(d.refined.len()),
-                    View::Hours => Some(d.tasks.len()),
-                    _ => None,
-                });
-                let count = count.or(match view {
-                    View::Tasks => Some(self.tasks_ui.open_count()).filter(|n| *n > 0),
-                    View::Prs => self.prs.with(|p| p.data.as_ref().map(|x| x.active.len())),
-                    View::Chat => Some(self.chats.with(|cs| cs.iter().filter(|c| c.busy).count())).filter(|n| *n > 0),
-                    _ => None,
-                });
-                let pr_alert = view == View::Prs && self.prs.with(|p| p.data.as_ref().is_some_and(|x| x.active.iter().any(|pr| !pr.open_threads.is_empty())));
-                let alert = d.is_some_and(|d| match view {
-                    View::Now => d.now.iter().any(|i| i.back.is_some()),
-                    View::Hours => d.tasks.iter().any(|t| !views::task_flags(t).is_empty()),
-                    _ => false,
-                });
-                let r = nav_item(ui, label, self.view == view, count, alert || pr_alert, acc);
-                if self.view == view {
-                    active_rect = Some(r.rect);
+            // The menu scrolls in the height left above the bottom part (measured on the previous frame), so in a
+            // short window the bottom part never covers the last entries.
+            let bottom_id = egui::Id::unique("nav-bottom-height");
+            let bottom_h = ui.ctx().data(|m| m.get_temp::<f32>(bottom_id)).unwrap_or(40.0);
+            let nav_h = (ui.available_height() - bottom_h - 10.0).max(60.0);
+            egui::ScrollArea::vertical().id_salt("nav-scroll").max_height(nav_h).auto_shrink([false, true]).show(ui, |ui| {
+                // The active highlight is one shape that slides between entries; its slot is reserved under them.
+                // Its position is kept relative to the top of the menu, so scrolling does not make it lag behind.
+                let top = ui.min_rect().top();
+                let highlight = ui.painter().add(egui::Shape::Noop);
+                let mut active_rect = None;
+                for (view, label) in NAV.into_iter().filter(|(v, _)| shown(*v)) {
+                    let count = d.and_then(|d| match view {
+                        View::Now => Some(d.now.len()),
+                        View::Review => Some(d.review.len()),
+                        View::Refined => Some(d.refined.len()),
+                        View::Hours => Some(d.tasks.len()),
+                        _ => None,
+                    });
+                    let count = count.or(match view {
+                        View::Tasks => Some(self.tasks_ui.open_count()).filter(|n| *n > 0),
+                        View::Prs => self.prs.with(|p| p.data.as_ref().map(|x| x.active.len())),
+                        View::Chat => Some(self.chats.with(|cs| cs.iter().filter(|c| c.busy).count())).filter(|n| *n > 0),
+                        _ => None,
+                    });
+                    let pr_alert = view == View::Prs && self.prs.with(|p| p.data.as_ref().is_some_and(|x| x.active.iter().any(|pr| !pr.open_threads.is_empty())));
+                    let alert = d.is_some_and(|d| match view {
+                        View::Now => d.now.iter().any(|i| i.back.is_some()),
+                        View::Hours => d.tasks.iter().any(|t| !views::task_flags(t).is_empty()),
+                        _ => false,
+                    });
+                    let r = nav_item(ui, label, self.view == view, count, alert || pr_alert, acc);
+                    if self.view == view {
+                        active_rect = Some(r.rect.translate(vec2(0.0, -top)));
+                    }
+                    if r.clicked() {
+                        self.view = view;
+                    }
                 }
-                if r.clicked() {
-                    self.view = view;
+                let shown = motion::tween(ui.ctx(), egui::Id::unique("nav-highlight-alpha"), if active_rect.is_some() { 1.0 } else { 0.0 }, 0.2, 0.0);
+                if let Some(r) = active_rect.or_else(|| ui.ctx().data(|d| d.get_temp::<Rect>(egui::Id::unique("nav-highlight-last")))) {
+                    ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("nav-highlight-last"), r));
+                    let y = motion::tween(ui.ctx(), egui::Id::unique("nav-highlight-y"), r.top(), 0.3, r.top());
+                    let rect = Rect::from_min_size(pos2(r.left(), top + y), r.size());
+                    ui.painter().set(
+                        highlight,
+                        egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(4), theme::alpha(acc.main, 0.13 * shown), Stroke::new(1.0, theme::alpha(acc.main, 0.3 * shown)), StrokeKind::Inside)),
+                    );
                 }
-            }
-            let shown = motion::tween(ui.ctx(), egui::Id::unique("nav-highlight-alpha"), if active_rect.is_some() { 1.0 } else { 0.0 }, 0.2, 0.0);
-            if let Some(r) = active_rect.or_else(|| ui.ctx().data(|d| d.get_temp::<Rect>(egui::Id::unique("nav-highlight-last")))) {
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("nav-highlight-last"), r));
-                let y = motion::tween(ui.ctx(), egui::Id::unique("nav-highlight-y"), r.top(), 0.3, r.top());
-                let rect = Rect::from_min_size(pos2(r.left(), y), r.size());
-                ui.painter().set(
-                    highlight,
-                    egui::Shape::Rect(egui::epaint::RectShape::new(rect, CornerRadius::same(4), theme::alpha(acc.main, 0.13 * shown), Stroke::new(1.0, theme::alpha(acc.main, 0.3 * shown)), StrokeKind::Inside)),
-                );
-            }
+            });
 
-            ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+            // Short, with the whole sentence on hover: a long note took several lines of the menu.
+            let note = self.hotkey_note.clone();
+            let hotkey_note = |ui: &mut Ui| {
+                if let Some(note) = &note {
+                    ui.label(RichText::new("Ctrl+Alt+J ocupado").small().color(theme::AMBER)).on_hover_text(note);
+                }
+            };
+            let bottom = ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.horizontal(|ui| {
                     if dev && ui_kit::button(ui, "Atualizar", false, acc).clicked() {
                         board.refresh();
@@ -582,28 +598,29 @@ impl JarvisApp {
                     }
                 });
                 update_box(ui, acc);
-                if !dev {
-                    if let Some(note) = &self.hotkey_note {
-                        ui.label(RichText::new(note).small().color(theme::AMBER));
-                    }
-                    return;
-                }
-                let status = if b.loading {
-                    "A atualizar…".to_owned()
-                } else {
-                    match b.fetched_at {
-                        Some(at) => {
-                            let m = at.elapsed().as_secs() / 60;
-                            if m == 0 { "Atualizado agora mesmo".into() } else { format!("Atualizado há {m} min") }
+                if dev {
+                    let status = if b.loading {
+                        "A atualizar…".to_owned()
+                    } else {
+                        match b.fetched_at {
+                            Some(at) => {
+                                let m = at.elapsed().as_secs() / 60;
+                                if m == 0 { "Atualizado agora mesmo".into() } else { format!("Atualizado há {m} min") }
+                            }
+                            None => "Sem dados".into(),
                         }
-                        None => "Sem dados".into(),
-                    }
-                };
-                ui.label(RichText::new(status).monospace().size(11.0).color(theme::FAINT));
-                if let Some(note) = &self.hotkey_note {
-                    ui.label(RichText::new(note).small().color(theme::AMBER));
+                    };
+                    ui.label(RichText::new(status).monospace().size(11.0).color(theme::FAINT));
                 }
+                hotkey_note(ui);
+                ui.min_rect().height()
             });
+            // Content height of the bottom part, for the menu's height on the next frame.
+            let h = bottom.inner;
+            if (h - bottom_h).abs() > 0.5 {
+                ui.ctx().data_mut(|m| m.insert_temp(bottom_id, h));
+                ui.ctx().request_repaint();
+            }
         });
         if talk {
             self.voice.toggle();
