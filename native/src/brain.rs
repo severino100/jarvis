@@ -35,14 +35,24 @@ const PERSONA_RH: &str = include_str!("../../docs/persona-rh.md");
 const GEMINI_NOTES_RH: &str = include_str!("../../docs/persona-rh-gemini.md");
 const CODEX_NOTES_RH: &str = include_str!("../../docs/persona-rh-codex.md");
 
+const PERSONA_GERAL: &str = include_str!("../../docs/persona-geral.md");
+
+/// A personal conversation (rh, or the free conversation "geral"): no code, no shell; it starts in the person's
+/// own folder. The rest (dev) is the analysis of board items.
 fn is_rh(mode: &str) -> bool {
-    mode == crate::profile::RH
+    mode == crate::profile::RH || mode == crate::profile::GERAL
 }
 
-/// Jarvis's rules for the conversation's mode (dev: analysis and preparation; rh: the personal HR assistant), with the
-/// team's rules on top.
+/// Jarvis's rules for the conversation's mode (dev: analysis and preparation; rh: the personal HR assistant; geral:
+/// the free conversation that can create tasks and draft emails), with the team's rules on top.
 fn persona(mode: &str) -> String {
-    if is_rh(mode) { with_team(PERSONA_RH, crate::profile::Guide::PersonaRh) } else { with_team(PERSONA, crate::profile::Guide::Persona) }
+    if mode == crate::profile::GERAL {
+        crate::profile::render(PERSONA_GERAL.trim()).replace("{hoje}", &chrono::Local::now().format("%Y-%m-%d (%A)").to_string())
+    } else if is_rh(mode) {
+        with_team(PERSONA_RH, crate::profile::Guide::PersonaRh)
+    } else {
+        with_team(PERSONA, crate::profile::Guide::Persona)
+    }
 }
 
 fn agy_notes(mode: &str) -> String {
@@ -725,7 +735,102 @@ fn tail_chars(s: &str, n: usize) -> String {
 
 fn mark_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\[\[(ABRIR_NO_CLAUDE|IMPLEMENTAR:([^\]\n]+)|LEMBRAR:([^\]\n]+))\]\]").unwrap())
+    RE.get_or_init(|| Regex::new(r"\[\[(ABRIR_NO_CLAUDE|IMPLEMENTAR:([^\]\n]+)|LEMBRAR:([^\]\n]+)|TAREFA:([^\]\n]+))\]\]").unwrap())
+}
+
+/// The personal tasks the reply asked for ([[TAREFA: título | AAAA-MM-DD]] lines): (title, due date if any).
+pub fn read_tasks(text: &str) -> Vec<(String, Option<String>)> {
+    mark_re()
+        .captures_iter(text)
+        .filter_map(|c| c.get(4))
+        .filter_map(|m| {
+            let mut parts = m.as_str().split('|');
+            let title = parts.next()?.trim().to_owned();
+            let due = parts.next().map(str::trim).filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok()).map(str::to_owned);
+            (!title.is_empty()).then_some((title, due))
+        })
+        .collect()
+}
+
+/// An email the reply drafted ([[EMAIL]] … [[/EMAIL]]).
+#[derive(Clone, Default, PartialEq, Debug)]
+pub struct Email {
+    pub to: String,
+    pub cc: String,
+    pub subject: String,
+    pub body: String,
+}
+
+/// Splits a reply into text and email drafts, in order: Err(text) for the prose, Ok(email) for each draft. An email
+/// still arriving (no [[/EMAIL]] yet) stays text until it closes.
+pub fn split_emails(text: &str) -> Vec<Result<Email, String>> {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| Regex::new(r"(?s)\[\[EMAIL\]\](.*?)\[\[/EMAIL\]\]").unwrap());
+    let mut out = Vec::new();
+    let mut last = 0;
+    for m in re.captures_iter(text) {
+        let whole = m.get(0).unwrap();
+        let before = text[last..whole.start()].trim();
+        if !before.is_empty() {
+            out.push(Err(before.to_owned()));
+        }
+        out.push(Ok(parse_email(&m[1])));
+        last = whole.end();
+    }
+    let rest = text[last..].trim();
+    if !rest.is_empty() {
+        out.push(Err(rest.to_owned()));
+    }
+    out
+}
+
+fn parse_email(block: &str) -> Email {
+    let mut e = Email::default();
+    let (head, body) = match block.split_once("\n---") {
+        Some((h, b)) => (h, b.trim_start_matches('-')),
+        None => ("", block),
+    };
+    for line in head.lines() {
+        let Some((k, v)) = line.split_once(':') else { continue };
+        let v = v.trim().to_owned();
+        match k.trim().to_lowercase().as_str() {
+            "para" | "to" => e.to = v,
+            "cc" => e.cc = if v.starts_with('(') { String::new() } else { v },
+            "assunto" | "subject" => e.subject = v,
+            _ => {}
+        }
+    }
+    e.body = body.trim().to_owned();
+    e
+}
+
+/// Opens the draft in the classic Outlook of this PC, ready to send (never sends it); without it, the default mail
+/// app through a mailto: link.
+pub fn open_email(e: &Email) {
+    let q = |s: &str| s.replace('\'', "''");
+    let script = format!(
+        "$o = New-Object -ComObject Outlook.Application; $m = $o.CreateItem(0); $m.To = '{}'; $m.CC = '{}'; $m.Subject = '{}'; $m.Body = '{}'; $m.Display()",
+        q(&e.to), q(&e.cc), q(&e.subject), q(&e.body)
+    );
+    let ok = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdin(Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if !ok {
+        let enc = |s: &str| s.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~@".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect::<String>();
+        open(&format!("mailto:{}?cc={}&subject={}&body={}", enc(&e.to), enc(&e.cc), enc(&e.subject), enc(&e.body)));
+    }
+}
+
+/// The draft as text, to paste anywhere.
+pub fn email_text(e: &Email) -> String {
+    let mut t = format!("Para: {}\n", e.to);
+    if !e.cc.is_empty() {
+        t.push_str(&format!("Cc: {}\n", e.cc));
+    }
+    format!("{t}Assunto: {}\n\n{}", e.subject, e.body)
 }
 
 /// The rules the reply asked Jarvis to remember ([[LEMBRAR: …]] lines), in order.

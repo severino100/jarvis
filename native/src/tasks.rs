@@ -59,6 +59,14 @@ fn now() -> String {
     crate::chat::now()
 }
 
+/// A task the person asked for in a conversation ([[TAREFA: …]]): goes to the top of the list.
+pub fn add_from_chat(title: &str, due: Option<String>) -> Todo {
+    let t = Todo { id: new_id(), title: title.to_owned(), due, source: "jarvis".into(), created_at: now(), ..Default::default() };
+    let added = t.clone();
+    change(|ts| ts.insert(0, t));
+    added
+}
+
 fn new_id() -> String {
     format!("t{:x}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap_or_default().as_nanos())
 }

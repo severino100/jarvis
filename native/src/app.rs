@@ -29,6 +29,8 @@ use std::{
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum View {
     Today,
+    /// The free conversation: talk, tasks, emails (chat_view in the "geral" mode).
+    Jarvis,
     Agenda,
     Tasks,
     Now,
@@ -41,8 +43,9 @@ pub enum View {
     Settings,
 }
 
-const NAV: [(View, &str); 10] = [
+const NAV: [(View, &str); 11] = [
     (View::Today, "Hoje"),
+    (View::Jarvis, "Jarvis"),
     (View::Agenda, "Agenda"),
     (View::Tasks, "Tarefas"),
     (View::Now, "Agora"),
@@ -153,6 +156,7 @@ fn view_from(name: &str) -> View {
         "prs" => View::Prs,
         "cleanup" => View::Cleanup,
         "settings" => View::Settings,
+        "jarvis" => View::Jarvis,
         "eu" => {
             settings_view::open_mine();
             View::Settings
@@ -651,6 +655,7 @@ impl JarvisApp {
             View::Refined => ("Refined livre", "Itens refinados sem ninguém atribuído, pela ordem do backlog."),
             View::Chat if !crate::profile::dev() => ("Chat", "Escreve ou fala com o Jarvis: escreve, resume, analisa e propõe. Nada é enviado nem apagado sem o teu sim."),
             View::Chat => ("Chat", "A análise é feita aqui, por escrito ou por voz. A implementação segue para o Claude Code ou o Antigravity."),
+            View::Jarvis => ("Jarvis", "Fala à vontade, por escrito ou por voz: perguntas, ideias, piadas, tarefas e emails (em rascunho, para enviares tu)."),
             View::Hours => ("Horas do sprint", "As tuas tarefas deste sprint: estimativa, Work Done e o que falta preencher."),
             View::Cleanup => ("Limpeza", "Worktrees dos itens e anexos descarregados. Só limpa o que já não tem trabalho por enviar."),
             View::Settings => ("Definições", "Cor, tamanho, avisos, quem responde e voz. O Notion está em Tarefas; o que é só teu, em O meu Jarvis."),
@@ -665,6 +670,18 @@ impl JarvisApp {
         if self.view == View::Chat {
             let chats = self.chats.clone();
             let acts = chats.with(|cs| chat_view::page(ui, cs, &mut self.chat_ui, acc));
+            let ctx = ui.ctx().clone();
+            self.apply(&ctx, acts);
+            return;
+        }
+        // The free conversation, on the whole page ("Começar de novo" in its header starts another).
+        if self.view == View::Jarvis {
+            let chats = self.chats.clone();
+            let id = chats.jarvis_id(false);
+            let acts = chats.with(|cs| match cs.iter().find(|c| c.id == id) {
+                Some(c) => chat_view::conversation(ui, c, &mut self.chat_ui, acc, false),
+                None => Vec::new(),
+            });
             let ctx = ui.ctx().clone();
             self.apply(&ctx, acts);
             return;
@@ -1117,6 +1134,9 @@ impl JarvisApp {
         for a in acts {
             match a {
                 Action::New => self.chat_ui.selected = Some(self.chats.create(None, None, None)),
+                Action::FreshJarvis => {
+                    self.chats.jarvis_id(true);
+                }
                 Action::Select(id) => self.chat_ui.selected = Some(id),
                 Action::Send(id, text) => {
                     self.chats.send(&id, &text, false, chat::engine());

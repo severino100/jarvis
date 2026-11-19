@@ -192,7 +192,9 @@ fn main() -> eframe::Result {
         };
         let t = std::time::Instant::now();
         // The mode of a new general conversation: rh when the HR mode is on (JARVIS_SHOT_MODES=rh to try it).
-        let about = brain::Turn { mode: profile::default_mode(false), item: "" };
+        // JARVIS_ASK_MODE=geral|rh|dev picks it.
+        let mode = std::env::var("JARVIS_ASK_MODE").unwrap_or_else(|_| profile::default_mode(false).to_owned());
+        let about = brain::Turn { mode: &mode, item: "" };
         println!("[modo {}]", about.mode);
         let r = match args.get(2).map(String::as_str) {
             Some("gemini") => brain::ask_gemini(&text, "", &about, None, args.get(4).map(String::as_str), None, &stop, &mut on),
@@ -200,6 +202,13 @@ fn main() -> eframe::Result {
             _ => brain::ask_claude(&text, &about, "sonnet", None, &stop, &mut on),
         };
         println!("\n{:?} em {:.1}s", r, t.elapsed().as_secs_f32());
+        // What a conversation would do with the marks (tasks are only listed here, not created).
+        for (t, due) in brain::read_tasks(&said) {
+            println!("Tarefa: {t} {due:?}");
+        }
+        for e in brain::split_emails(&said).into_iter().flatten() {
+            println!("Email: {e:?}");
+        }
         // Same as a conversation: [[LEMBRAR: …]] goes to memoria.md.
         for rule in brain::read_remember(&said).iter().filter_map(|r| eu::remember(r)) {
             println!("Guardei em {}: {}", eu::memory_file().display(), rule.text);

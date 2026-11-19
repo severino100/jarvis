@@ -322,6 +322,7 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
             let (w, p) = voice_ready;
             ui.label(RichText::new(if w { "Whisper pronto" } else { "Falta o Whisper (instalador)" }).color(if w { theme::GREEN } else { theme::AMBER }));
             ui.label(RichText::new(if p { "Voz Piper pronta" } else { "Falta a Piper (instalador)" }).color(if p { theme::GREEN } else { theme::AMBER }));
+            voice_test(ui, acc);
         });
     });
     ui.add_space(10.0);
@@ -364,6 +365,55 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
         settings::update(|x| *x = s);
     }
     look
+}
+
+/// "Testar a voz": checks every piece the voice needs (in the background: Whisper takes a few seconds) and lists
+/// what failed with the button that fixes it.
+fn voice_test(ui: &mut Ui, acc: Accent) {
+    use crate::voice::{diagnose, Check};
+    use std::sync::Mutex;
+    /// None: never run; Some(None): running; Some(Some(list)): done.
+    static RESULT: Mutex<Option<Option<Vec<Check>>>> = Mutex::new(None);
+    let state = RESULT.lock().unwrap().clone();
+    let running = matches!(state, Some(None));
+    ui.add_enabled_ui(!running, |ui| {
+        if ui_kit::button(ui, "Testar a voz", false, acc).on_hover_text("Vê os ficheiros, o Visual C++, a Piper e o Whisper, o microfone e as colunas").clicked() {
+            *RESULT.lock().unwrap() = Some(None);
+            let ctx = ui.ctx().clone();
+            std::thread::spawn(move || {
+                let list = diagnose();
+                *RESULT.lock().unwrap() = Some(Some(list));
+                ctx.request_repaint();
+            });
+        }
+    });
+    match state {
+        Some(None) => {
+            ui.end_row();
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new("A testar (a Piper diz uma frase e o Whisper lê-a)…").color(theme::MUTED));
+            });
+        }
+        Some(Some(list)) => {
+            ui.end_row();
+            ui.vertical(|ui| {
+                for c in list {
+                    ui.horizontal_wrapped(|ui| {
+                        ui_kit::diamond(ui, c.ok, if c.ok { theme::GREEN } else { theme::AMBER }, 4.0);
+                        ui.label(RichText::new(c.what).color(theme::BRIGHT).strong());
+                        ui.label(RichText::new(&c.detail).small().color(if c.ok { theme::MUTED } else { theme::AMBER }));
+                        if let Some((label, link)) = &c.fix {
+                            if ui_kit::button(ui, label, true, acc).on_hover_text(link).clicked() {
+                                crate::brain::open(link);
+                            }
+                        }
+                    });
+                }
+            });
+        }
+        None => {}
+    }
 }
 
 /// "O meu Jarvis": the modes, the blocks of Hoje, and what this person taught Jarvis (instructions, memory, skills).

@@ -73,6 +73,25 @@ fn piper() -> Option<(PathBuf, PathBuf)> {
     (exe.exists() && model.exists()).then_some((exe, model))
 }
 
+/// The Microsoft Visual C++ runtime the Whisper and Piper builds need (a fresh Windows does not have it).
+pub const VC_REDIST: &str = "https://aka.ms/vs/17/release/vc_redist.x64.exe";
+
+/// Whisper and Piper link to these; vcomp140 only comes with the Visual C++ Redistributable.
+pub fn vc_runtime_installed() -> bool {
+    let sys = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows")).join("System32");
+    ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll", "vcomp140.dll"].iter().all(|d| sys.join(d).is_file())
+}
+
+/// Why Whisper or Piper did not run, in words the person can act on.
+fn explain_exit(what: &str, status: std::process::ExitStatus) -> String {
+    match status.code().map(|c| c as u32) {
+        // STATUS_DLL_NOT_FOUND / STATUS_INVALID_IMAGE_FORMAT / STATUS_ENTRYPOINT_NOT_FOUND: a DLL is missing.
+        Some(0xC000_0135 | 0xC000_007B | 0xC000_0139) => format!("O {what} não arranca: falta o Microsoft Visual C++ Redistributable neste PC. Instala-o em {VC_REDIST} (ou em Definições → Voz → Testar a voz)."),
+        Some(c) => format!("O {what} falhou (código {c:#x})."),
+        None => format!("O {what} foi interrompido."),
+    }
+}
+
 impl Voice {
     pub fn new(ctx: egui::Context, chats: Chats, board: Board) -> Self {
         Self { st: Arc::default(), stop: Arc::default(), ctx, chats, board }
@@ -191,6 +210,11 @@ impl Voice {
                 Ok(t) => t,
                 Err(e) => {
                     self.log("jarvis", &format!("Tive um problema a ouvir: {e}"));
+                    // Missing files or runtime: it will not get better by listening again.
+                    if e.contains("Visual C++") || e.contains("não está instalado") {
+                        self.end();
+                        return;
+                    }
                     continue;
                 }
             };
@@ -248,7 +272,8 @@ impl Voice {
         if let Some(id) = self.chat_id().filter(|id| usable(id)) {
             return id;
         }
-        let id = self.chats.create(None, None, None);
+        // Outside an item, the voice talks in the free conversation of the Jarvis menu entry.
+        let id = self.chats.jarvis_id(false);
         self.set(|s| s.chat_id = Some(id.clone()));
         id
     }
@@ -302,11 +327,11 @@ impl Voice {
         let mic = MicrophoneBuilder::new()
             .default_device()
             .and_then(|b| b.default_config())
-            .map_err(|e| format!("Não encontrei o microfone: {e}"))?
+            .map_err(|e| format!("Não encontrei o microfone ({e}). {MIC_HINT}"))?
             .prefer_channel_counts([1.try_into().unwrap(), 2.try_into().unwrap()])
             .prefer_sample_rates([16_000.try_into().unwrap(), 48_000.try_into().unwrap()])
             .open_stream()
-            .map_err(|e| format!("Não consegui abrir o microfone: {e}"))?;
+            .map_err(|e| format!("Não consegui abrir o microfone ({e}). {MIC_HINT}"))?;
         let rate = mic.sample_rate().get();
         let ch = mic.channels().get() as usize;
         let frame = (rate as usize / 50).max(1);
@@ -373,7 +398,10 @@ impl Voice {
             return;
         }
         self.status("speaking", "A falar…");
-        let Some((exe, model)) = piper() else { return };
+        let Some((exe, model)) = piper() else {
+            self.status("idle", "Não consigo falar: a Piper não está instalada (corre o instalador do Jarvis, com a voz).");
+            return;
+        };
         let out = std::env::temp_dir().join(format!("jarvis-say-{}.wav", std::process::id()));
         let child = Command::new(exe)
             .args(["-m"])
@@ -391,11 +419,19 @@ impl Voice {
             use std::io::Write;
             let _ = stdin.write_all(for_speech(text).as_bytes());
         }
-        if !child.wait().is_ok_and(|s| s.success()) {
-            return;
+        match child.wait() {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                self.status("idle", &explain_exit("Piper", s));
+                return;
+            }
+            Err(_) => return,
         }
         let Ok(file) = fs::File::open(&out) else { return };
-        let Ok(sink) = rodio::DeviceSinkBuilder::open_default_sink() else { return };
+        let Ok(sink) = rodio::DeviceSinkBuilder::open_default_sink() else {
+            self.status("idle", "Não encontrei colunas nem auscultadores: vê o som do Windows.");
+            return;
+        };
         if let Ok(player) = rodio::play(sink.mixer(), std::io::BufReader::new(file)) {
             while !player.empty() {
                 if self.stopped() {
@@ -451,6 +487,9 @@ fn transcribe(audio: &[f32]) -> Result<String, String> {
         .output()
         .map_err(|e| e.to_string())?;
     let _ = fs::remove_file(&file);
+    if !out.status.success() {
+        return Err(explain_exit("Whisper", out.status));
+    }
     // whisper-cli on Windows sometimes writes accented letters in the ANSI code page instead of UTF-8.
     let text = String::from_utf8(out.stdout.clone()).unwrap_or_else(|_| out.stdout.iter().map(|&b| b as char).collect());
     let text = regex::Regex::new(r"\[[^\]]*\]").unwrap().replace_all(&text, " ");
@@ -746,6 +785,71 @@ pub fn self_test(text: &str) -> Result<String, String> {
     let samples: Vec<f32> = r.samples::<i16>().filter_map(Result::ok).map(|s| s as f32 / 32768.0).collect();
     let _ = fs::remove_file(&out);
     transcribe(&resample(&samples, rate, RATE))
+}
+
+const MIC_HINT: &str = "Vê se há um microfone ligado e se, em Definições do Windows → Privacidade e segurança → Microfone, as apps de ambiente de trabalho podem usá-lo.";
+
+/// One line of "Testar a voz": what was checked, whether it works, what was found, and how to fix it.
+#[derive(Clone)]
+pub struct Check {
+    pub what: &'static str,
+    pub ok: bool,
+    pub detail: String,
+    /// (button, link) when there is something to do.
+    pub fix: Option<(&'static str, String)>,
+}
+
+/// Definições → Voz → Testar a voz: the files, the Visual C++ runtime, Piper and Whisper together, the
+/// microphone and the speakers. Takes a few seconds (Whisper reads a phrase); run it off the UI thread.
+pub fn diagnose() -> Vec<Check> {
+    let setup = "https://github.com/severino100/jarvis/releases/latest/download/Jarvis-Setup.exe".to_owned();
+    let mut out = Vec::new();
+    let files = whisper().is_some() && piper().is_some();
+    out.push(Check {
+        what: "Ficheiros da voz",
+        ok: files,
+        detail: if files { format!("em {}", crate::settings::vendor_dir().display()) } else { "faltam o Whisper ou a Piper: corre o instalador do Jarvis com a opção da voz".into() },
+        fix: (!files).then(|| ("Descarregar o instalador", setup)),
+    });
+    let vc = vc_runtime_installed();
+    out.push(Check {
+        what: "Microsoft Visual C++",
+        ok: vc,
+        detail: if vc { "instalado".into() } else { "falta: o Whisper e a Piper não arrancam sem ele (pede administrador para instalar)".into() },
+        fix: (!vc).then(|| ("Instalar o Visual C++", VC_REDIST.to_owned())),
+    });
+    if files {
+        let r = self_test("Olá, sou o Jarvis.");
+        let ok = r.as_ref().is_ok_and(|t| !t.trim().is_empty());
+        out.push(Check {
+            what: "Falar e ouvir",
+            ok,
+            detail: match r {
+                Ok(t) if !t.trim().is_empty() => format!("a Piper disse \"Olá, sou o Jarvis.\" e o Whisper ouviu \"{t}\""),
+                Ok(_) => "a Piper e o Whisper correram mas não saiu texto".into(),
+                Err(e) => e,
+            },
+            fix: None,
+        });
+    }
+    let mic = mic_test();
+    out.push(Check {
+        what: "Microfone",
+        ok: mic.is_ok(),
+        detail: match &mic {
+            Ok(_) => "abre e recebe som".into(),
+            Err(e) => format!("{e}. {MIC_HINT}"),
+        },
+        fix: mic.is_err().then(|| ("Abrir a privacidade do microfone", "ms-settings:privacy-microphone".to_owned())),
+    });
+    let sink = rodio::DeviceSinkBuilder::open_default_sink().is_ok();
+    out.push(Check {
+        what: "Colunas ou auscultadores",
+        ok: sink,
+        detail: if sink { "o Windows tem uma saída de som".into() } else { "não encontrei saída de som".into() },
+        fix: (!sink).then(|| ("Abrir o som do Windows", "ms-settings:sound".to_owned())),
+    });
+    out
 }
 
 /// Dev aid (`jarvis --mic-test`): opens the microphone for a second and reports what it hears.

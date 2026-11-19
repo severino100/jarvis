@@ -60,6 +60,8 @@ impl Default for Profile {
 
 pub const DEV: &str = "dev";
 pub const RH: &str = "rh";
+/// Not a profile mode: the free conversation in the Jarvis menu entry (talk, tasks, emails), for everyone.
+pub const GERAL: &str = "geral";
 
 /// The modes that are on; never empty (an empty list reads as dev, as before modes existed).
 pub fn modes() -> Vec<String> {

@@ -81,6 +81,11 @@ Source: "https://huggingface.co/rhasspy/piper-voices/resolve/v1.0.0/pt/pt_PT/tug
   Hash: "fe0918dfc0f1a89264a6eea4afe8e95d8e9fed3cc6c81b5c2f87fcb2b50c7320"; \
   Flags: external download ignoreversion; Tasks: voz; Check: Falta('voices\pt_PT-tugao-medium.onnx.json')
 
+; O Whisper e a Piper precisam do Microsoft Visual C++ Redistributable, que um Windows acabado de instalar não tem.
+; Só desce quando falta; instala-se no fim (pede administrador uma vez).
+Source: "https://aka.ms/vs/17/release/vc_redist.x64.exe"; DestName: "vc_redist.x64.exe"; DestDir: "{tmp}"; \
+  ExternalSize: 25_635_768; Flags: external download ignoreversion deleteafterinstall; Tasks: voz; Check: FaltaVc
+
 [Icons]
 Name: "{autoprograms}\Jarvis"; Filename: "{app}\jarvis.exe"; WorkingDir: "{app}"; Comment: "Jarvis, o teu assistente"; \
   AppUserModelID: "jarvis.desktop"
@@ -92,6 +97,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
   ValueData: """{app}\jarvis.exe"" --hidden"; Flags: uninsdeletevalue; Tasks: arranque
 
 [Run]
+Filename: "{tmp}\vc_redist.x64.exe"; Parameters: "/install /passive /norestart"; StatusMsg: "A instalar o Microsoft Visual C++ (para a voz)…"; \
+  Flags: shellexec waituntilterminated; Tasks: voz; Check: FaltaVc
 Filename: "{app}\jarvis.exe"; WorkingDir: "{app}"; Description: "Abrir o Jarvis"; Flags: nowait postinstall skipifsilent
 ; A atualização feita pelo próprio Jarvis (update.rs) corre o setup em silêncio com /relancar=1: abre-o no fim.
 Filename: "{app}\jarvis.exe"; WorkingDir: "{app}"; Flags: nowait; Check: Relancar
@@ -113,6 +120,16 @@ end;
 function Falta(Relativo: String): Boolean;
 begin
   Result := not FileExists(ExpandConstant('{localappdata}\Jarvis\vendor\') + Relativo);
+end;
+
+// As DLL do Visual C++ que o Whisper e a Piper usam; o vcomp140 só vem com o Redistributable.
+function FaltaVc: Boolean;
+var
+  Sys: String;
+begin
+  Sys := ExpandConstant('{sys}\');
+  Result := not (FileExists(Sys + 'msvcp140.dll') and FileExists(Sys + 'vcruntime140.dll')
+    and FileExists(Sys + 'vcruntime140_1.dll') and FileExists(Sys + 'vcomp140.dll'));
 end;
 
 function NoPath(Nome: String): Boolean;

@@ -29,6 +29,8 @@ pub enum Action {
     SetMode(String, String),
     /// "Desfazer" on a remembered rule: conversation, message
     Forget(String, String),
+    /// "Começar de novo" in the Jarvis page: a new free conversation (the old one stays in Chat).
+    FreshJarvis,
 }
 
 #[derive(Default)]
@@ -128,7 +130,9 @@ pub fn conversation(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_wind
             .show(ui, |ui| {
                 ui.set_max_width(ui.available_width().min(980.0));
                 if c.messages.is_empty() {
-                    let empty = if c.mode() == crate::profile::RH {
+                    let empty = if c.mode() == crate::profile::GERAL {
+                        "Fala à vontade: pergunta o que quiseres, pede uma piada, \"cria uma tarefa para amanhã: ligar ao contabilista\" ou \"escreve um email ao João a adiar a reunião\". Os emails ficam em rascunho para enviares tu."
+                    } else if c.mode() == crate::profile::RH {
                         "Escreve ou fala com o Jarvis: um email, o resumo de uma reunião, uma vaga, uma análise. Ele escreve e propõe; nada é enviado nem apagado sem o teu sim."
                     } else {
                         "Escreve abaixo. A análise é feita aqui; a implementação abre no Claude Code ou no Antigravity."
@@ -223,6 +227,9 @@ fn header(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool, 
             if !in_window && button(ui, "Janela", false, acc).on_hover_text("Abrir numa janela à parte").clicked() {
                 acts.push(Action::PopOut(c.id.clone()));
             }
+            if !in_window && !c.busy && c.mode() == crate::profile::GERAL && !c.messages.is_empty() && button(ui, "Começar de novo", false, acc).on_hover_text("Uma conversa nova; esta fica em Chat").clicked() {
+                acts.push(Action::FreshJarvis);
+            }
             if let Some((text, at)) = st.flash.get(&c.id) {
                 if at.elapsed().as_secs() < 6 {
                     ui.label(RichText::new(text).color(theme::GREEN));
@@ -257,8 +264,23 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
                 };
                 markdown::show(ui, t, acc);
             } else {
-                markdown::show(ui, &m.text, acc);
+                // An [[EMAIL]] block is a draft card; the rest is text.
+                for part in crate::brain::split_emails(&m.text) {
+                    match part {
+                        Err(text) => markdown::show(ui, &text, acc),
+                        Ok(e) => email_card(ui, &e, acc),
+                    }
+                }
             }
+        }
+        "task" => {
+            ui.horizontal(|ui| {
+                ui_kit::diamond(ui, true, theme::GREEN, 3.5);
+                ui.add(egui::Label::new(RichText::new(format!("Tarefa criada: {}", m.text)).size(12.5).color(theme::MUTED)).wrap());
+                if ui.add(egui::Label::new(RichText::new("Ver em Tarefas").size(12.5).underline().color(acc.light)).sense(Sense::click())).clicked() {
+                    crate::app::post(crate::app::AppEvent::Go(crate::app::View::Tasks));
+                }
+            });
         }
         "remembered" => {
             ui.horizontal(|ui| {
@@ -390,7 +412,7 @@ fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
     // Sits in the composer's bottom bar: no captions, the tooltips say what each one is.
     ui.add_enabled_ui(!c.busy, |ui| {
         // With both modes on, a general conversation can be dev or RH (the rules the engine gets).
-        if c.item_id.is_none() && c.pr_key.is_none() && crate::profile::dev() && crate::profile::has_mode(crate::profile::RH) {
+        if c.item_id.is_none() && c.pr_key.is_none() && c.mode() != crate::profile::GERAL && crate::profile::dev() && crate::profile::has_mode(crate::profile::RH) {
             let mode = c.mode();
             let mut pick = mode.clone();
             egui::ComboBox::from_id_salt(("mode", &c.id))
@@ -485,6 +507,38 @@ fn composer(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, acts: &mut Vec<
                 });
             });
         });
+}
+
+/// An email the Jarvis drafted: who, subject and body, with "Abrir no Outlook" (a draft ready to send; Jarvis never
+/// sends it) and "Copiar".
+fn email_card(ui: &mut Ui, e: &crate::brain::Email, acc: Accent) {
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        who(ui, "RASCUNHO DE EMAIL", acc.main);
+        for (label, value) in [("Para", &e.to), ("Cc", &e.cc), ("Assunto", &e.subject)] {
+            if label == "Cc" && value.is_empty() {
+                continue;
+            }
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(label).small().color(theme::MUTED));
+                ui.add(egui::Label::new(RichText::new(if value.is_empty() { "(por preencher)" } else { value.as_str() }).color(if value.is_empty() { theme::AMBER } else { theme::BRIGHT })).wrap());
+            });
+        }
+        ui.add_space(4.0);
+        Frame::new().fill(theme::alpha(Color32::BLACK, 0.2)).corner_radius(CornerRadius::same(3)).inner_margin(Margin::symmetric(10, 8)).show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.add(egui::Label::new(RichText::new(&e.body).color(theme::TEXT)).wrap());
+        });
+        ui.add_space(6.0);
+        ui.horizontal(|ui| {
+            if button(ui, "Abrir no Outlook", true, acc).on_hover_text("Abre um email novo com isto no Outlook; és tu que o envias").clicked() {
+                let e = e.clone();
+                std::thread::spawn(move || crate::brain::open_email(&e));
+            }
+            if button(ui, "Copiar", false, acc).clicked() {
+                ui.ctx().copy_text(crate::brain::email_text(e));
+            }
+        });
+    });
 }
 
 /// Three dots that light up in turn while the reply is still being written.

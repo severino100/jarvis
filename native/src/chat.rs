@@ -33,7 +33,8 @@ pub struct ToolLine {
 #[serde(default, rename_all = "camelCase")]
 pub struct Msg {
     pub id: String,
-    /// user | assistant | tools | inform | note | error | implement | handoff | divider | remembered | forgotten
+    /// user | assistant | tools | inform | note | error | implement | handoff | divider | remembered | forgotten | task
+    /// (a task created from the conversation; its id in `worktree`)
     pub role: String,
     pub text: String,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -350,6 +351,19 @@ impl Chats {
         }
     }
 
+    /// The free conversation of the Jarvis menu entry (and of the voice, outside an item): the one in
+    /// settings.jarvis_chat, or a new one in the "geral" mode. `fresh` starts a new one (the old stays in Chat).
+    pub fn jarvis_id(&self, fresh: bool) -> String {
+        let saved = crate::settings::load().jarvis_chat;
+        if !fresh && !saved.is_empty() && self.with(|cs| cs.iter().any(|c| c.id == saved)) {
+            return saved;
+        }
+        let id = self.create(Some("Jarvis".into()), None, None);
+        self.edit(&id, true, |c| c.mode = Some(crate::profile::GERAL.into()));
+        crate::settings::update(|s| s.jarvis_chat = id.clone());
+        id
+    }
+
     pub fn create(&self, title: Option<String>, item_id: Option<i64>, pr_key: Option<String>) -> String {
         let c = Chat {
             id: new_id(),
@@ -618,6 +632,7 @@ Mensagem de {}:
             .edit(id, true, |c| {
                 let (mut browser, mut implement) = (false, None);
                 let mut remember = Vec::new();
+                let mut new_tasks = Vec::new();
                 for (k, m) in c.messages.iter_mut().enumerate() {
                     m.live = false;
                     for t in &mut m.tools {
@@ -632,6 +647,7 @@ Mensagem de {}:
                             implement = i;
                         }
                         remember.extend(brain::read_remember(&m.text));
+                        new_tasks.extend(brain::read_tasks(&m.text));
                         m.text = brain::strip_marks(&m.text);
                     }
                 }
@@ -640,6 +656,13 @@ Mensagem de {}:
                 if ok {
                     for (j, r) in remember.iter().filter_map(|r| crate::eu::remember(r)).enumerate() {
                         c.messages.insert(before + j, msg("remembered", r.text));
+                    }
+                    // "Cria uma tarefa…": it goes to Tarefas and shows as a quiet note.
+                    let before = c.messages.len().saturating_sub(1);
+                    for (j, (title, due)) in new_tasks.into_iter().enumerate() {
+                        let t = crate::tasks::add_from_chat(&title, due.clone());
+                        let when = due.map(|d| format!(" (para {})", d.get(5..).unwrap_or(&d).replace('-', "/"))).unwrap_or_default();
+                        c.messages.insert(before + j, Msg { worktree: Some(t.id), ..msg("task", format!("{title}{when}")) });
                     }
                 }
                 let before = c.messages.len().saturating_sub(1);
