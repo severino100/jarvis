@@ -64,7 +64,7 @@ powershell -ExecutionPolicy Bypass -File ..\scripts\check-native.ps1     # vê o
 
 ### Atualização automática
 
-`update.rs`: só o Jarvis instalado (o exe em `%LOCALAPPDATA%\Programs\Jarvis`) se atualiza; um compilado a partir do código não. Um minuto depois de arrancar e depois de 6 em 6 horas, lê o último release (`api.github.com/repos/severino100/jarvis/releases/latest`); se for mais novo do que a `version` do `Cargo.toml`, aparece uma caixa no fundo do menu lateral (e em Definições), com uma notificação uma vez por versão. **Instalar** descarrega o `Jarvis-Setup.exe` desse release para a pasta temporária e corre-o com `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /relancar=1`: o Jarvis fecha, o setup instala por cima (com as opções escolhidas da primeira vez) e volta a abri-lo. As conversas e as definições ficam.
+`update.rs`: só o Jarvis instalado (o exe em `%LOCALAPPDATA%\Programs\Jarvis`) se atualiza; um compilado a partir do código não. Um minuto depois de arrancar, de hora a hora e quando a janela vem para a frente (se a última vez foi há mais de 15 minutos), lê o último release (`api.github.com/repos/severino100/jarvis/releases/latest`); se for mais novo do que a `version` do `Cargo.toml`, aparece uma caixa no fundo do menu lateral (e em Definições), com uma notificação uma vez por versão. **Instalar** descarrega o `Jarvis-Setup.exe` desse release para a pasta temporária e corre-o com `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /relancar=1`: o Jarvis fecha, o setup instala por cima (com as opções escolhidas da primeira vez) e volta a abri-lo. As conversas e as definições ficam.
 
 Testar:
 

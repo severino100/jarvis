@@ -274,7 +274,10 @@ impl eframe::App for JarvisApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         while let Ok(ev) = self.events.try_recv() {
             match ev {
-                AppEvent::Show => Self::show_window(ctx),
+                AppEvent::Show => {
+                    Self::show_window(ctx);
+                    crate::update::on_show();
+                }
                 AppEvent::Repaint => {}
                 AppEvent::Music(c) => self.music.send(c),
                 AppEvent::MusicWindow(on) => settings::update(|s| s.music_window = on),

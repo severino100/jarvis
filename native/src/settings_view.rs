@@ -328,7 +328,7 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
     ui.add_space(10.0);
     ui_kit::hud_panel(ui, acc, false, |ui| {
         use crate::update::{self, State};
-        row(ui, "Versão", "O Jarvis vê no GitHub se há versão nova ao arrancar e de 6 em 6 horas. Instalar descarrega o instalador novo, fecha o Jarvis e volta a abri-lo; as conversas e as definições ficam.", |ui| {
+        row(ui, "Versão", "O Jarvis vê no GitHub se há versão nova ao arrancar, de hora a hora e quando abres a janela. Instalar descarrega o instalador novo, fecha o Jarvis e volta a abri-lo; as conversas e as definições ficam.", |ui| {
             ui.label(RichText::new(format!("Jarvis {}", update::current())).color(theme::BRIGHT));
             if !update::installed() {
                 ui.label(RichText::new("Compilado a partir do código: não se atualiza sozinho.").small().color(theme::FAINT));

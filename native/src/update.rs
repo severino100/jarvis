@@ -22,7 +22,11 @@ use crate::app::{post, AppEvent};
 
 const LATEST: &str = "https://api.github.com/repos/severino100/jarvis/releases/latest";
 const SETUP: &str = "Jarvis-Setup.exe";
-const EVERY: Duration = Duration::from_secs(6 * 3600);
+const EVERY: Duration = Duration::from_secs(3600);
+/// Bringing the window to the front looks again when the last look is older than this.
+const ON_SHOW: Duration = Duration::from_secs(15 * 60);
+
+static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
 
 #[derive(Clone, Default, PartialEq)]
 pub enum State {
@@ -104,6 +108,7 @@ pub fn check_now() {
         return;
     }
     set(State::Checking);
+    *LAST.lock().unwrap() = Some(std::time::Instant::now());
     thread::spawn(|| match latest() {
         Ok((version, url)) if newer(&version, &current()) => {
             let first = crate::settings::with_state(|st| {
@@ -121,7 +126,16 @@ pub fn check_now() {
     });
 }
 
-/// Checks at start-up (after a minute, so it does not compete with the board) and every 6 hours.
+/// When the window comes to the front (tray, hotkey, a notice): a new look if the last one is 15 minutes old, so
+/// a Jarvis left open for days still sees a release soon after it is out.
+pub fn on_show() {
+    let stale = LAST.lock().unwrap().is_none_or(|t| t.elapsed() > ON_SHOW);
+    if stale && !matches!(state(), State::Available { .. }) {
+        check_now();
+    }
+}
+
+/// Checks at start-up (after a minute, so it does not compete with the board) and every hour.
 pub fn start() {
     if !installed() {
         return;
