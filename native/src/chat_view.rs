@@ -387,50 +387,58 @@ fn engine_row(ui: &mut Ui, c: &Chat, acts: &mut Vec<Action>) {
     let models = model_options(&engine);
     let model = c.engine_model.clone().unwrap_or_else(|| if engine == default_engine { default_model(&engine) } else { "auto".into() });
     let model_label = models.iter().find(|(id, _)| *id == model).map(|(_, l)| l.clone()).unwrap_or_else(|| model.clone());
+    // Sits in the composer's bottom bar: no captions, the tooltips say what each one is.
     ui.add_enabled_ui(!c.busy, |ui| {
-        ui.horizontal(|ui| {
-            // With both modes on, a general conversation can be dev or RH (the rules the engine gets).
-            if c.item_id.is_none() && c.pr_key.is_none() && crate::profile::dev() && crate::profile::has_mode(crate::profile::RH) {
-                ui.label(RichText::new("MODO").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
-                let mode = c.mode();
-                let mut pick = mode.clone();
-                egui::ComboBox::from_id_salt(("mode", &c.id)).selected_text(if mode == crate::profile::RH { "RH" } else { "Dev" }).width(70.0).show_ui(ui, |ui| {
+        // With both modes on, a general conversation can be dev or RH (the rules the engine gets).
+        if c.item_id.is_none() && c.pr_key.is_none() && crate::profile::dev() && crate::profile::has_mode(crate::profile::RH) {
+            let mode = c.mode();
+            let mut pick = mode.clone();
+            egui::ComboBox::from_id_salt(("mode", &c.id))
+                .selected_text(if mode == crate::profile::RH { "RH" } else { "Dev" })
+                .width(56.0)
+                .show_ui(ui, |ui| {
                     ui.selectable_value(&mut pick, crate::profile::DEV.to_owned(), "Dev");
                     ui.selectable_value(&mut pick, crate::profile::RH.to_owned(), "RH");
-                });
-                if pick != mode {
-                    acts.push(Action::SetMode(c.id.clone(), pick));
-                }
-                ui.add_space(12.0);
+                })
+                .response
+                .on_hover_text("Modo: as regras que o motor recebe nesta conversa");
+            if pick != mode {
+                acts.push(Action::SetMode(c.id.clone(), pick));
             }
-            ui.label(RichText::new("MOTOR").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
-            let mut pick = engine.clone();
-            egui::ComboBox::from_id_salt(("engine", &c.id)).selected_text(crate::chat::engine_label(&engine)).width(150.0).show_ui(ui, |ui| {
+        }
+        let mut pick = engine.clone();
+        egui::ComboBox::from_id_salt(("engine", &c.id))
+            .selected_text(crate::chat::engine_label(&engine))
+            .width(116.0)
+            .show_ui(ui, |ui| {
                 for e in ["claude", "antigravity", "codex"] {
                     if crate::chat::engine_installed(e) {
                         ui.selectable_value(&mut pick, e.to_owned(), crate::chat::engine_label(e));
                     }
                 }
-            });
-            if pick != engine {
-                acts.push(Action::SetEngine(c.id.clone(), Some(pick), None));
-            }
-            ui.add_space(12.0);
-            ui.label(RichText::new("MODELO").font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.4));
-            let mut m = model.clone();
-            // Never wider than what is left of the row (the mode picker may share it).
-            let w = (ui.available_width() - 40.0).clamp(120.0, 260.0);
-            egui::ComboBox::from_id_salt(("model", &c.id)).selected_text(model_label).width(w).show_ui(ui, |ui| {
+            })
+            .response
+            .on_hover_text("Motor: quem responde. Podes trocar a meio; o outro motor recebe o que já foi dito.");
+        if pick != engine {
+            acts.push(Action::SetEngine(c.id.clone(), Some(pick), None));
+        }
+        let mut m = model.clone();
+        // Never wider than what is left of the bar (the send button and the mode picker share it).
+        let w = (ui.available_width() - 260.0).clamp(110.0, 230.0);
+        egui::ComboBox::from_id_salt(("model", &c.id))
+            .selected_text(model_label)
+            .width(w)
+            .show_ui(ui, |ui| {
                 for (id, label) in &models {
                     ui.selectable_value(&mut m, id.clone(), label);
                 }
-            });
-            if m != model {
-                acts.push(Action::SetEngine(c.id.clone(), Some(engine.clone()), Some(m)));
-            }
-        });
+            })
+            .response
+            .on_hover_text("Modelo deste motor nesta conversa");
+        if m != model {
+            acts.push(Action::SetEngine(c.id.clone(), Some(engine.clone()), Some(m)));
+        }
     });
-    ui.add_space(4.0);
 }
 
 fn composer(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, acts: &mut Vec<Action>) {
@@ -443,25 +451,40 @@ fn composer(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, acts: &mut Vec<
     let focused = ui.memory(|m| m.has_focus(id));
     let enter = focused && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter));
     context_warning(ui, c, acc, acts);
-    engine_row(ui, c, acts);
     let draft = st.drafts.entry(c.id.clone()).or_default();
-    ui.horizontal_top(|ui| {
-        let w = ui.available_width() - 130.0;
-        let hint = if c.busy { "A responder… podes ir escrevendo a próxima." } else { "Escreve ao Jarvis (Enter envia, Shift+Enter muda de linha)" };
-        ui.add(TextEdit::multiline(draft).id(id).hint_text(hint).desired_rows(3).desired_width(w).margin(Margin::symmetric(10, 8)));
-        ui.vertical(|ui| {
-            if c.busy {
-                if button(ui, "Parar", false, acc).clicked() {
-                    acts.push(Action::Stop(c.id.clone()));
-                }
-            } else {
-                let send = button(ui, "Enviar", true, acc).clicked() || enter;
-                if send && !draft.trim().is_empty() {
-                    acts.push(Action::Send(c.id.clone(), std::mem::take(draft)));
-                }
-            }
+    // One card: the text on top, and under it who answers (mode, engine, model) on the left and Enviar on the right.
+    let edge = if focused { theme::alpha(acc.main, 0.75) } else { theme::alpha(acc.main, 0.28) };
+    Frame::new()
+        .fill(theme::alpha(acc.main, 0.035))
+        .stroke(Stroke::new(1.0, edge))
+        .corner_radius(CornerRadius::same(6))
+        .inner_margin(Margin { left: 4, right: 8, top: 4, bottom: 8 })
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            let hint = if c.busy { "A responder… podes ir escrevendo a próxima." } else { "Escreve ao Jarvis" };
+            ui.add(TextEdit::multiline(draft).id(id).frame(Frame::NONE).hint_text(hint).desired_rows(3).desired_width(f32::INFINITY).margin(Margin::symmetric(8, 6)));
+            ui.add_space(2.0);
+            ui.horizontal(|ui| {
+                ui.add_space(6.0);
+                engine_row(ui, c, acts);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if c.busy {
+                        if button(ui, "Parar", false, acc).clicked() {
+                            acts.push(Action::Stop(c.id.clone()));
+                        }
+                    } else {
+                        let send = button(ui, "Enviar", true, acc).on_hover_text("Enter envia; Shift+Enter muda de linha").clicked() || enter;
+                        if send && !draft.trim().is_empty() {
+                            acts.push(Action::Send(c.id.clone(), std::mem::take(draft)));
+                        }
+                    }
+                    if ui.available_width() > 190.0 {
+                        ui.add_space(6.0);
+                        ui.label(RichText::new("Enter envia · Shift+Enter muda de linha").small().color(theme::FAINT));
+                    }
+                });
+            });
         });
-    });
 }
 
 /// Three dots that light up in turn while the reply is still being written.
@@ -501,16 +524,15 @@ fn context_warning(ui: &mut Ui, c: &Chat, acc: Accent, acts: &mut Vec<Action>) {
     if c.busy {
         return;
     }
-    Frame::new().fill(theme::alpha(theme::AMBER, 0.08)).stroke(Stroke::new(1.0, theme::alpha(theme::AMBER, 0.4))).corner_radius(CornerRadius::same(4)).inner_margin(Margin::symmetric(12, 8)).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.horizontal(|ui| {
-            ui_kit::diamond(ui, true, theme::AMBER, 4.0);
-            ui.label(RichText::new(format!("Esta conversa já leva {} mil tokens de contexto: cada mensagem relê tudo.", ctx / 1000)).color(theme::TEXT));
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if button(ui, "Continuar numa sessão nova", false, acc).on_hover_text("O motor escreve um resumo (item, decisões, plano, ficheiros, estado, perguntas) e a conversa segue numa sessão nova a partir dele. O histórico continua visível aqui.").clicked() {
-                    acts.push(Action::Compact(c.id.clone()));
-                }
-            });
+    // A slim line over the composer, not a box: it is advice, not an error.
+    ui.horizontal(|ui| {
+        ui.add_space(4.0);
+        ui_kit::diamond(ui, true, theme::AMBER, 3.5);
+        ui.label(RichText::new(format!("Conversa longa: {} mil tokens, e cada mensagem relê tudo.", ctx / 1000)).small().color(theme::TEXT));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if button(ui, "Resumir e continuar", false, acc).on_hover_text("O motor escreve um resumo (item, decisões, plano, ficheiros, estado, perguntas) e a conversa segue numa sessão nova a partir dele. O histórico continua visível aqui.").clicked() {
+                acts.push(Action::Compact(c.id.clone()));
+            }
         });
     });
     ui.add_space(6.0);

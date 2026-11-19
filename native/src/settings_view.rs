@@ -266,6 +266,12 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
     });
     ui.add_space(10.0);
     ui_kit::hud_panel(ui, acc, false, |ui| {
+        row(ui, "O que o Jarvis precisa", "Os motores de IA e o git não vêm com o Jarvis: cada um instala-se à parte e usa a tua conta. Basta um motor; os outros servem para quando o plano de um acaba.", |ui| {
+            ui.vertical(|ui| crate::requisitos::panel(ui, acc));
+        });
+    });
+    ui.add_space(10.0);
+    ui_kit::hud_panel(ui, acc, false, |ui| {
         row(ui, "Motor das conversas novas", "Cada conversa pode trocar de motor e de modelo por cima da caixa de escrita. Cada motor usa a tua subscrição dele; quando o plano de um acaba, a conversa pode seguir noutro (Claude Code → Antigravity → Codex, só os instalados) e fica lá até mudares.", |ui| {
             // "Só Claude Code" was the old way to turn the fallback off.
             if s.model == "claude" {
@@ -297,7 +303,7 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
                 chips(ui, &mut s.agy_model, &refs, acc);
             });
         } else {
-            ui.label(RichText::new("Antigravity indisponível: falta o Antigravity CLI (agy).").small().color(theme::FAINT));
+            ui.label(RichText::new("Antigravity indisponível: não está instalado (vê O que o Jarvis precisa, acima).").small().color(theme::FAINT));
         }
         if crate::brain::codex_installed() {
             row(ui, "Modelo do Codex", "Os modelos que a tua conta ChatGPT tem no Codex. Predefinido usa o do teu config.toml do Codex.", |ui| {
@@ -307,7 +313,7 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
                 chips(ui, &mut s.codex_model, &refs, acc);
             });
         } else {
-            ui.label(RichText::new("Codex indisponível: instala a app Codex ou o Codex CLI.").small().color(theme::FAINT));
+            ui.label(RichText::new("Codex indisponível: não está instalado (vê O que o Jarvis precisa, acima).").small().color(theme::FAINT));
         }
     });
     ui.add_space(10.0);

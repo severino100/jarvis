@@ -19,14 +19,12 @@ pub struct Welcome {
     step: usize,
     url: String,
     instructions: String,
-    /// Claude Code, Antigravity and Codex on this PC, checked when the step opens and on "Verificar outra vez".
-    engines: Option<(bool, bool, bool)>,
 }
 
 impl Welcome {
     pub fn new() -> Self {
         let step = std::env::var("JARVIS_SHOT_STEP").ok().and_then(|s| s.parse().ok()).unwrap_or(0usize).min(STEPS.len() - 1);
-        Self { step, url: String::new(), instructions: String::new(), engines: None }
+        Self { step, url: String::new(), instructions: String::new() }
     }
 }
 
@@ -106,28 +104,10 @@ pub fn view(ui: &mut Ui, w: &mut Welcome, acc: Accent) -> bool {
         }
         2 => {
             title(ui, "A tua conta de IA", "O Jarvis não tem IA própria: usa a tua subscrição do Claude (Claude Code), a tua conta Google (Antigravity) ou a tua conta ChatGPT (Codex). Basta um. Não há chaves nem pagamentos por utilização.");
-            let (claude, agy, codex) = *w.engines.get_or_insert_with(|| (crate::brain::claude_installed(), crate::brain::gemini_installed(), crate::brain::codex_installed()));
-            label(ui, "Claude Code");
-            status(ui, claude, "Instalado neste PC.", "Não o encontrei neste PC.");
-            if !claude {
-                ui.label(RichText::new("Instala-o e, numa linha de comandos, escreve claude e entra com a tua conta Claude.").small().color(theme::MUTED));
-                if button(ui, "Como instalar o Claude Code", false, acc).clicked() {
-                    crate::brain::open("https://claude.com/claude-code");
-                }
-            }
-            ui.add_space(10.0);
-            label(ui, "Antigravity");
-            status(ui, agy, "Instalado neste PC.", "Não está instalado (é opcional).");
-            ui.add_space(10.0);
-            label(ui, "Codex");
-            status(ui, codex, "Instalado neste PC.", "Não está instalado (é opcional).");
-            if !codex {
-                ui.label(RichText::new("Com a app Codex instalada e a tua conta ChatGPT, o Codex passa a ser outro motor.").small().color(theme::MUTED));
-            }
-            if !(claude || agy || codex) {
-                ui.add_space(6.0);
-                ui_kit::hint(ui, "Sem nenhum destes o Jarvis não consegue responder. Instala um e carrega em Verificar outra vez.", true, acc);
-            }
+            label(ui, "O que está neste PC");
+            crate::requisitos::panel(ui, acc);
+            let found = crate::requisitos::get(ui.ctx()).unwrap_or_default();
+            let (agy, codex) = (found.get(1).copied().unwrap_or(false), found.get(2).copied().unwrap_or(false));
             ui.add_space(10.0);
             label(ui, "Quem responde nas conversas");
             if s.model == "claude" {
@@ -152,10 +132,6 @@ pub fn view(ui: &mut Ui, w: &mut Welcome, acc: Accent) -> bool {
             ui.add_space(10.0);
             label(ui, "Email e agenda");
             ui.label(RichText::new("A agenda vem do Outlook deste PC, sem nada para ligar. Se não usas o Outlook, desliga a agenda no passo do Hoje.").color(theme::MUTED));
-            ui.add_space(6.0);
-            if button(ui, "Verificar outra vez", false, acc).clicked() {
-                w.engines = None;
-            }
         }
         3 => {
             title(ui, "A tua equipa", "O pacote da equipa traz as regras, os modelos e as skills de todos: normalmente é um link git que alguém da equipa te dá. Sem pacote, o Jarvis funciona na mesma.");
@@ -243,7 +219,6 @@ pub fn view(ui: &mut Ui, w: &mut Welcome, acc: Accent) -> bool {
         if w.step < last {
             if button(ui, "Seguinte", true, acc).clicked() {
                 w.step += 1;
-                w.engines = None;
             }
         } else if button(ui, "Começar", true, acc).clicked() {
             if !w.instructions.trim().is_empty() && eu::instructions().trim().is_empty() {

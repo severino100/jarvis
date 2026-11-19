@@ -30,6 +30,7 @@ mod eu;
 mod welcome;
 mod theme;
 mod update;
+mod requisitos;
 
 use app::{AppEvent, JarvisApp};
 use eframe::egui;

@@ -243,7 +243,14 @@ fn command(exe: &Path, mode: &str) -> Command {
 /// Runs the process, calls `line` for every JSON line of stdout, and returns stderr and the exit code.
 fn run(mut cmd: Command, input: Option<String>, stop: &StopHandle, mut line: impl FnMut(Value)) -> Result<(String, Option<i32>), String> {
     stop.stopped.store(false, Ordering::SeqCst);
-    let mut child = cmd.spawn().map_err(|e| format!("Não consegui arrancar {:?}: {e}", cmd.get_program()))?;
+    let mut child = cmd.spawn().map_err(|e| {
+        // Claude Code runs as "claude" from the PATH when its installer's folder is not there: not found = not installed.
+        if e.kind() == std::io::ErrorKind::NotFound && cmd.get_program() == "claude" {
+            crate::requisitos::missing_message("Claude Code")
+        } else {
+            format!("Não consegui arrancar {:?}: {e}", cmd.get_program())
+        }
+    })?;
     let stdout = child.stdout.take().unwrap();
     let mut stderr = child.stderr.take().unwrap();
     if let (Some(text), Some(mut w)) = (input, child.stdin.take()) {
@@ -409,7 +416,7 @@ fn tokens(u: &Value) -> u64 {
 /// One Gemini turn through agy. The first turn of a conversation gets the conversation so far as text; later turns
 /// resume the agy conversation by id.
 pub fn ask_gemini(text: &str, history: &str, turn: &Turn, conversation: Option<&str>, model: Option<&str>, prep: Option<&Prep>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
-    let exe = agy_exe().ok_or("O Antigravity CLI (agy) não está instalado.")?;
+    let exe = agy_exe().ok_or_else(|| crate::requisitos::missing_message("Antigravity"))?;
     let (rh, item_context) = (is_rh(turn.mode), turn.item);
     let mut parts: Vec<String> = Vec::new();
     if conversation.is_none() {
@@ -527,9 +534,14 @@ pub fn ask_gemini(text: &str, history: &str, turn: &Turn, conversation: Option<&
 /* ---------- Codex (ChatGPT) ---------- */
 
 /// The Codex CLI: the one inside the Codex app when it is installed (kept up to date by the app), else the npm one.
+/// The answer is kept (asking the package manager takes a moment, and the screens ask every frame);
+/// `forget_codex` makes the next call look again, after the person installs it.
 pub fn codex_exe() -> Option<PathBuf> {
-    static EXE: OnceLock<Option<PathBuf>> = OnceLock::new();
-    EXE.get_or_init(|| {
+    let mut cached = CODEX.lock().unwrap();
+    if let Some(found) = cached.as_ref() {
+        return found.clone();
+    }
+    let found = {
         // WindowsApps cannot be listed by a normal process; the package manager says where the app lives.
         let app = Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", "(Get-AppxPackage OpenAI.Codex).InstallLocation"])
@@ -543,8 +555,15 @@ pub fn codex_exe() -> Option<PathBuf> {
             .filter(|p| p.exists());
         let npm = dirs::config_dir().map(|d| d.join(r"npm\node_modules\@openai\codex\node_modules\@openai\codex-win32-x64\vendor\x86_64-pc-windows-msvc\codex\codex.exe"));
         app.or(npm.filter(|p| p.exists()))
-    })
-    .clone()
+    };
+    *cached = Some(found.clone());
+    found
+}
+
+static CODEX: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
+
+pub fn forget_codex() {
+    *CODEX.lock().unwrap() = None;
 }
 
 pub fn codex_installed() -> bool {
@@ -578,7 +597,7 @@ pub fn codex_models() -> Vec<(String, String)> {
 /// later turns resume the Codex thread. Codex works in its sandbox with write access to the projects folder only.
 pub fn ask_codex(text: &str, history: &str, turn: &Turn, thread: Option<&str>, model: Option<&str>, stop: &StopHandle, on: &mut dyn FnMut(Ev)) -> Result<Outcome, String> {
     let (rh, item_context) = (is_rh(turn.mode), turn.item);
-    let exe = codex_exe().ok_or("O Codex não está instalado (app Codex ou npm i -g @openai/codex).")?;
+    let exe = codex_exe().ok_or_else(|| crate::requisitos::missing_message("Codex"))?;
     let login = Command::new(&exe).args(["login", "status"]).creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null()).output().map_err(|e| e.to_string())?;
     let login = format!("{}{}", String::from_utf8_lossy(&login.stdout), String::from_utf8_lossy(&login.stderr));
     if !login.contains("ChatGPT") {

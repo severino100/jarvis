@@ -1312,7 +1312,7 @@ impl JarvisApp {
             "antigravity" => {
                 let exe = dirs::data_local_dir().unwrap_or_default().join("Programs").join("antigravity").join("Antigravity.exe");
                 if !exe.exists() {
-                    self.chats.add_note(id, "Não encontrei o Antigravity instalado.", "error");
+                    self.chats.add_note(id, &crate::requisitos::missing_message("Antigravity"), "error");
                     return;
                 }
                 let _ = std::process::Command::new(exe).arg(&w).spawn();
@@ -1321,7 +1321,7 @@ impl JarvisApp {
             }
             "codex" => {
                 let Some(exe) = brain::codex_exe() else {
-                    self.chats.add_note(id, "Não encontrei o Codex instalado.", "error");
+                    self.chats.add_note(id, &crate::requisitos::missing_message("Codex"), "error");
                     return;
                 };
                 // The interactive Codex in its own console, in the worktree, with the request as its first message.
