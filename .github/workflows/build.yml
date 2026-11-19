@@ -1,0 +1,42 @@
+# Em cada push e pull request para o main: compila o Jarvis, corre os testes e compila o instalador (para apanhar
+# erros no installer/jarvis.iss). Não publica nada; os releases são do release.yml.
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+
+      - name: Compilar
+        working-directory: native
+        run: cargo build --release --locked
+
+      - name: Testes
+        working-directory: native
+        run: cargo test --locked
+
+      - name: Instalador (Jarvis-Setup.exe)
+        run: |
+          choco upgrade innosetup -y --no-progress
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\jarvis.iss
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
