@@ -24,8 +24,13 @@ use std::{
 };
 
 const RATE: u32 = 16_000;
-const SPEECH_RMS: f32 = 0.02;
-const SILENCE_RMS: f32 = 0.012;
+/// Speech is this many times louder than the room noise measured when the microphone opens; the limits keep a very
+/// quiet laptop microphone (built-in arrays often give ~0.001 at rest) usable and a noisy room from triggering.
+const SPEECH_OVER_NOISE: f32 = 4.0;
+const SPEECH_RMS_MIN: f32 = 0.003;
+const SPEECH_RMS_MAX: f32 = 0.02;
+/// Frames (20 ms each) used to measure the room before listening for speech.
+const CALIBRATION_FRAMES: usize = 15;
 const END_SILENCE: Duration = Duration::from_millis(1300);
 const MAX_UTTERANCE: Duration = Duration::from_secs(20);
 /// Nothing said for this long ends the conversation (the microphone is not left open forever).
@@ -130,7 +135,12 @@ impl Voice {
             return;
         }
         if whisper().is_none() {
-            crate::notify::notify("Voz indisponível", "Falta o Whisper: corre o instalador do Jarvis (descarrega a voz).", AppEvent::Show);
+            // No voice installed: the same panel, to write.
+            self.set(|s| {
+                s.visible = true;
+                s.phase = "idle";
+                s.status = "Escreve em baixo. Para falar, instala a voz (instalador do Jarvis).".into();
+            });
             return;
         }
         self.stop.store(false, Ordering::SeqCst);
@@ -161,11 +171,39 @@ impl Voice {
         self.set(|s| s.visible = false);
     }
 
-    /// Written text in the voice panel goes to the same conversation, without being read aloud.
+    /// Written text in the voice panel: handled like speech (quick answers, opening things, the AI in the same
+    /// conversation), answered in the panel and not read aloud.
     pub fn write(&self, text: &str) {
-        let id = self.conversation(None);
-        self.chats.send(&id, text, false, chat::engine());
-        self.log("me", text);
+        let text = text.trim().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        self.log("me", &text);
+        let me = self.clone();
+        thread::spawn(move || {
+            let mut convo = Convo { engaged: true, ..Default::default() };
+            let r = me.board.with(|b| understand(&text, b.data.as_ref(), &mut convo));
+            if let Some(v) = r.view {
+                post(AppEvent::Go(v));
+            }
+            if let Some(id) = r.open {
+                post(AppEvent::OpenUrl(crate::azdo::item_url(id)));
+            }
+            if let (Some(c), Some(m)) = (r.music, crate::music::current()) {
+                m.send(c);
+            }
+            if r.refresh {
+                me.board.refresh();
+            }
+            if r.brain || r.say.is_empty() {
+                me.brain_turn(&text, r.focus, false);
+            } else {
+                me.log("jarvis", &r.say);
+            }
+            if !me.with(|s| s.on) {
+                me.status("idle", "Escreve ou carrega em Falar.");
+            }
+        });
     }
 
     pub fn chat_id(&self) -> Option<String> {
@@ -237,7 +275,7 @@ impl Voice {
             }
             if r.brain {
                 convo.engaged = true;
-                self.brain_turn(&heard, r.focus);
+                self.brain_turn(&heard, r.focus, true);
                 idle_since = Instant::now();
                 continue;
             }
@@ -278,16 +316,22 @@ impl Voice {
         id
     }
 
-    fn brain_turn(&self, text: &str, focus: Option<i64>) {
+    /// One turn of the AI in the voice conversation; `spoken`: the answer is also read aloud (a typed one is not).
+    fn brain_turn(&self, text: &str, focus: Option<i64>, spoken: bool) {
         let id = self.conversation(focus);
         let (tx, rx) = mpsc::channel();
         self.chats.set_voice_hook(&id, Some(tx));
         self.status("thinking", "A pensar…");
-        if !self.chats.send(&id, text, true, chat::engine()) {
+        let say = |t: &str| {
+            if spoken {
+                self.speak(t);
+            }
+        };
+        if !self.chats.send(&id, text, spoken, chat::engine()) {
             self.chats.set_voice_hook(&id, None);
-            let say = "Ainda estou a trabalhar na resposta anterior. Dá-me um momento.";
-            self.log("jarvis", say);
-            self.speak(say);
+            let busy = "Ainda estou a trabalhar na resposta anterior. Dá-me um momento.";
+            self.log("jarvis", busy);
+            say(busy);
             return;
         }
         let mut tool = String::from("A pensar…");
@@ -298,7 +342,7 @@ impl Voice {
             match m {
                 VoiceMsg::Block(t) => {
                     self.log("jarvis", &t);
-                    self.speak(&t);
+                    say(&t);
                     self.status("thinking", &tool);
                 }
                 VoiceMsg::Tool(label) => {
@@ -307,13 +351,13 @@ impl Voice {
                 }
                 VoiceMsg::Done { error, kind } => {
                     match kind.as_deref() {
-                        Some("implement") => self.speak("Está tudo preparado. Escolhe no Jarvis onde queres implementar: Claude Code ou Antigravity."),
-                        Some("handoff") => self.speak("Abri esta conversa no Claude para veres no browser."),
+                        Some("implement") => say("Está tudo preparado. Escolhe no Jarvis onde queres implementar."),
+                        Some("handoff") => say("Abri esta conversa no Claude para veres no browser."),
                         _ => {}
                     }
                     if let Some(e) = error {
                         self.log("jarvis", &e);
-                        self.speak("Tive um problema. Está escrito na janela.");
+                        say("Tive um problema. Está escrito na janela.");
                     }
                     break;
                 }
@@ -340,6 +384,8 @@ impl Voice {
         let mut chunks: Vec<Vec<f32>> = Vec::new();
         let (mut heard_at, mut quiet_since, mut loud) = (None::<Instant>, None::<Instant>, 0u32);
         let mut buf = Vec::with_capacity(frame);
+        let mut noise: Vec<f32> = Vec::with_capacity(CALIBRATION_FRAMES);
+        let (mut speech_rms, mut silence_rms) = (SPEECH_RMS_MAX, SPEECH_RMS_MAX * 0.6);
         let mut it = mic.into_iter();
         loop {
             if self.stopped() {
@@ -354,13 +400,24 @@ impl Voice {
                 buf.push(sum / ch as f32);
             }
             let rms = (buf.iter().map(|x| x * x).sum::<f32>() / buf.len() as f32).sqrt();
-            self.set(|s| s.level = (rms * 8.0).min(0.6));
+            if noise.len() < CALIBRATION_FRAMES {
+                noise.push(rms);
+                if noise.len() == CALIBRATION_FRAMES {
+                    let mut sorted = noise.clone();
+                    sorted.sort_by(f32::total_cmp);
+                    let floor = sorted[sorted.len() / 2];
+                    speech_rms = (floor * SPEECH_OVER_NOISE).clamp(SPEECH_RMS_MIN, SPEECH_RMS_MAX);
+                    silence_rms = speech_rms * 0.6;
+                }
+                continue;
+            }
+            self.set(|s| s.level = (rms / speech_rms * 0.2).min(0.6));
             let now = Instant::now();
-            if rms > SPEECH_RMS {
+            if rms > speech_rms {
                 heard_at.get_or_insert(now);
                 loud += 1;
                 quiet_since = None;
-            } else if heard_at.is_some() && rms < SILENCE_RMS {
+            } else if heard_at.is_some() && rms < silence_rms {
                 quiet_since.get_or_insert(now);
             }
             if heard_at.is_some() {
@@ -389,7 +446,13 @@ impl Voice {
         if loud < 12 {
             return Ok(None);
         }
-        let mono: Vec<f32> = chunks.concat();
+        let mut mono: Vec<f32> = chunks.concat();
+        // A quiet microphone gives Whisper a whisper: bring the loudest point up to ~0.9 (never more than 30×).
+        let peak = mono.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        if peak > 0.0 && peak < 0.5 {
+            let gain = (0.9 / peak).min(30.0);
+            mono.iter_mut().for_each(|x| *x *= gain);
+        }
         Ok(Some(resample(&mono, rate, RATE)))
     }
 
@@ -856,10 +919,17 @@ pub fn diagnose() -> Vec<Check> {
 pub fn mic_test() -> Result<String, String> {
     let mic = MicrophoneBuilder::new().default_device().and_then(|b| b.default_config()).map_err(|e| e.to_string())?.open_stream().map_err(|e| e.to_string())?;
     let (rate, ch) = (mic.sample_rate().get(), mic.channels().get());
-    let n = rate as usize * ch as usize;
+    let n = rate as usize * ch as usize * 4;
     let v: Vec<f32> = mic.into_iter().take(n).collect();
     let rms = (v.iter().map(|x| x * x).sum::<f32>() / v.len().max(1) as f32).sqrt();
-    Ok(format!("{rate} Hz, {ch} canais, {} amostras, rms {rms:.4}", v.len()))
+    let frame = (rate as usize / 50) * ch as usize;
+    let loudest = v.chunks(frame.max(1)).map(|c| (c.iter().map(|x| x * x).sum::<f32>() / c.len() as f32).sqrt()).fold(0.0f32, f32::max);
+    println!("4 s: rms médio {rms:.4}, o mais alto em 20 ms {loudest:.4}");
+    use rodio::cpal::traits::{DeviceTrait, HostTrait};
+    let host = rodio::cpal::default_host();
+    let default = host.default_input_device().and_then(|d| d.description().ok().map(|x| format!("{x:?}"))).unwrap_or_default();
+    let all: Vec<String> = host.input_devices().map(|ds| ds.filter_map(|d| d.description().ok().map(|x| format!("{x:?}"))).collect()).unwrap_or_default();
+    Ok(format!("{rate} Hz, {ch} canais, {} amostras, rms {rms:.4} · predefinido: {default} · entradas: {}", v.len(), all.join(" | ")))
 }
 
 impl Voice {

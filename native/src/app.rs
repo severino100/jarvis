@@ -1062,16 +1062,23 @@ impl JarvisApp {
                 ui.add_space(6.0);
                 let mut draft: String = ui.ctx().data_mut(|d| d.get_temp(draft_id).unwrap_or_default());
                 ui.horizontal(|ui| {
-                    let r = ui.add(egui::TextEdit::singleline(&mut draft).hint_text("Ou escreve aqui…").desired_width(ui.available_width() - 4.0));
+                    let on = voice.with(|v| v.on);
+                    let hint = if on { "Fala, ou escreve aqui e carrega em Enter…" } else { "Escreve aqui e carrega em Enter…" };
+                    let r = ui.add(egui::TextEdit::singleline(&mut draft).hint_text(hint).desired_width(ui.available_width() - 4.0));
+                    // With the microphone off, the box is where you talk: it takes the keyboard straight away.
+                    if !on && !r.has_focus() && !ui.ctx().memory(|m| m.focused().is_some()) {
+                        r.request_focus();
+                    }
                     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !draft.trim().is_empty() {
                         voice.write(draft.trim());
                         draft.clear();
+                        r.request_focus();
                     }
                 });
                 ui.ctx().data_mut(|d| d.insert_temp(draft_id, draft));
                 ui.horizontal(|ui| {
                     let on = voice.with(|v| v.on);
-                    if ui_kit::button(ui, if on { "Terminar" } else { "Falar outra vez" }, !on, acc).clicked() {
+                    if ui_kit::button(ui, if on { "Parar de ouvir" } else { "Falar" }, !on, acc).clicked() {
                         if on { voice.end() } else { voice.toggle() }
                     }
                     if let Some(id) = voice.chat_id() {
