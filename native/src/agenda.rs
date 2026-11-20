@@ -1,4 +1,5 @@
-//! Agenda from the classic Outlook on this PC (scripts/calendar.ps1 over COM, read-only), and the week view like
+//! Agenda from the calendars the person connected (the classic Outlook on this PC through scripts/calendar.ps1, and
+//! iCalendar links through ics.rs; read-only), and the week view like
 //! Teams: days side by side, hours down, a block per meeting, the "now" line, and joining Teams calls.
 
 use crate::{
@@ -60,6 +61,8 @@ pub struct Week {
     pub account: String,
     pub events: Vec<Event>,
     pub at: Option<Instant>,
+    /// `CALENDARS_GEN` when it was read: a week read before the calendars changed is read again.
+    pub epoch: u64,
 }
 
 #[derive(Default)]
@@ -78,7 +81,62 @@ pub fn monday(d: NaiveDate) -> NaiveDate {
     d - Duration::days(d.weekday().num_days_from_monday() as i64)
 }
 
+/// The week from every calendar the person connected, side by side; a calendar that fails does not hide the others.
 fn load(from: NaiveDate) -> Week {
+    let sources = crate::profile::calendars();
+    let many = sources.len() > 1;
+    let results: Vec<(String, Result<Week, String>)> = std::thread::scope(|s| {
+        let jobs: Vec<_> = sources
+            .iter()
+            .map(|src| {
+                s.spawn(move || {
+                    let r = match src.kind.as_str() {
+                        "ics" => match src.link() {
+                            Some(link) => crate::ics::events(&link, from, 7).map(|events| Week { ok: true, events, ..Default::default() }),
+                            None => Err("Não consegui ler o link guardado: volta a adicionar este calendário.".into()),
+                        },
+                        _ => {
+                            let w = load_outlook(from);
+                            match w.error.clone() {
+                                Some(e) if !w.ok => Err(e),
+                                _ => Ok(w),
+                            }
+                        }
+                    };
+                    (src.name.clone(), r)
+                })
+            })
+            .collect();
+        jobs.into_iter().filter_map(|j| j.join().ok()).collect()
+    });
+    let mut week = Week { at: Some(Instant::now()), epoch: CALENDARS_GEN.load(std::sync::atomic::Ordering::SeqCst), ..Default::default() };
+    let mut errors = Vec::new();
+    for (i, (name, r)) in results.into_iter().enumerate() {
+        match r {
+            Ok(w) => {
+                week.ok = true;
+                if week.account.is_empty() {
+                    week.account = w.account;
+                }
+                for mut e in w.events {
+                    e.id = format!("{i}:{}", e.id);
+                    week.events.push(e);
+                }
+            }
+            Err(e) => errors.push(if many { format!("{name}: {e}") } else { e }),
+        }
+    }
+    if sources.is_empty() {
+        week.ok = true;
+    }
+    week.events.sort_by(|a, b| a.start.cmp(&b.start));
+    if !errors.is_empty() {
+        week.error = Some(errors.join(" "));
+    }
+    week
+}
+
+fn load_outlook(from: NaiveDate) -> Week {
     let script = crate::settings::resources_dir().join("calendar.ps1");
     let out = Command::new("powershell.exe")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
@@ -99,7 +157,7 @@ fn load(from: NaiveDate) -> Week {
         e @ serde_json::Value::Object(_) => serde_json::from_value(e.clone()).ok().into_iter().collect(),
         _ => Vec::new(),
     };
-    Week { ok: true, error: None, account: v["account"].as_str().unwrap_or_default().to_owned(), events, at: Some(Instant::now()) }
+    Week { ok: true, error: None, account: v["account"].as_str().unwrap_or_default().to_owned(), events, at: Some(Instant::now()), epoch: 0 }
 }
 
 impl Agenda {
@@ -111,7 +169,8 @@ impl Agenda {
     pub fn week(&self, from: NaiveDate, force: bool) -> Option<Week> {
         let mut inner = self.inner.lock().unwrap();
         let hit = inner.weeks.get(&from).cloned();
-        let stale = hit.as_ref().is_none_or(|w| w.at.is_none_or(|a| a.elapsed().as_secs() > 600));
+        let epoch = CALENDARS_GEN.load(std::sync::atomic::Ordering::SeqCst);
+        let stale = hit.as_ref().is_none_or(|w| w.epoch != epoch || w.at.is_none_or(|a| a.elapsed().as_secs() > 600));
         if (force || stale) && inner.loading.insert(from) {
             let (me, ctx) = (self.inner.clone(), self.ctx.clone());
             std::thread::spawn(move || {
@@ -198,11 +257,17 @@ pub fn view(ui: &mut Ui, agenda: &Agenda, st: &mut AgendaUi, acc: Accent) {
     });
     ui.add_space(10.0);
     let Some(w) = agenda.week(st.week, force) else {
-        ui_kit::quiet(ui, "A ler a agenda do Outlook…", acc);
+        ui_kit::quiet(ui, "A ler a agenda…", acc);
         return;
     };
+    if crate::profile::calendars().is_empty() {
+        ui_kit::hint(ui, "Não tens nenhum calendário ligado. Liga um em Definições → Calendários: o Outlook deste PC, ou o link iCal do Google, do Outlook.com, do iCloud…", false, acc);
+        return;
+    }
     if let Some(e) = &w.error {
-        ui_kit::hint(ui, &format!("{e} A agenda vem do Outlook clássico deste PC: tem de estar instalado e com a conta aberta."), true, acc);
+        let outlook = crate::profile::calendars().iter().any(|c| c.kind == "outlook");
+        let extra = if outlook { " O Outlook vem do Outlook clássico deste PC: tem de estar instalado e com a conta aberta." } else { "" };
+        ui_kit::hint(ui, &format!("{e}{extra} Os calendários ligam-se em Definições → Calendários."), true, acc);
         if w.events.is_empty() {
             return;
         }
@@ -356,3 +421,6 @@ pub fn today_all(agenda: &Agenda) -> Vec<Event> {
     v.sort_by(|a, b| a.start.cmp(&b.start));
     v
 }
+
+/// Bumped when the person changes the connected calendars, so the weeks already read are read again.
+pub static CALENDARS_GEN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);

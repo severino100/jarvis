@@ -198,6 +198,8 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
     let mut look = false;
     profile_panel(ui, acc);
     ui.add_space(10.0);
+    calendars_panel(ui, acc);
+    ui.add_space(10.0);
     ui_kit::hud_panel(ui, acc, false, |ui| {
         row(ui, "Cor principal", "", |ui| {
             for (key, label) in ACCENTS {
@@ -590,5 +592,90 @@ pub fn zoom(s: &Settings) -> f32 {
         "110" => 1.1,
         "125" => 1.25,
         _ => 1.0,
+    }
+}
+
+/* ---------- calendars ---------- */
+
+static CAL_MSG: std::sync::Mutex<Option<(String, bool)>> = std::sync::Mutex::new(None);
+
+fn set_calendars(list: Vec<crate::profile::CalSource>) {
+    crate::profile::update(|p| p.calendars = Some(list));
+    crate::agenda::CALENDARS_GEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    crate::app::post(crate::app::AppEvent::Refresh);
+}
+
+/// Which calendars the agenda reads: the classic Outlook on this PC and/or any iCalendar (.ics) link, which is what
+/// Google Calendar, Outlook.com / Microsoft 365, iCloud, Nextcloud and Proton publish.
+fn calendars_panel(ui: &mut Ui, acc: Accent) {
+    use crate::profile::{self, CalSource};
+    static NAME: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    static LINK: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let list = profile::calendars();
+    let (mut remove, mut add_outlook, mut add_link) = (None, false, false);
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        row(ui, "Calendários", "A agenda e os avisos de reuniões juntam os calendários que ligares. Podes ter vários. Só leitura: o Jarvis nunca cria nem altera eventos.", |ui| {
+            ui.vertical(|ui| {
+                for (i, c) in list.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(&c.name).color(theme::BRIGHT));
+                        ui.label(RichText::new(if c.kind == "ics" { "link iCal" } else { "Outlook clássico" }).small().color(theme::FAINT));
+                        if button(ui, "Remover", false, acc).clicked() {
+                            remove = Some(i);
+                        }
+                    });
+                }
+                if list.is_empty() {
+                    ui.label(RichText::new("Nenhum calendário ligado.").small().color(theme::MUTED));
+                }
+                ui.add_space(4.0);
+                ui.horizontal_wrapped(|ui| {
+                    let mut name = NAME.lock().unwrap();
+                    let mut link = LINK.lock().unwrap();
+                    ui.add(egui::TextEdit::singleline(&mut *name).hint_text("Nome (ex.: Pessoal)").desired_width(140.0));
+                    ui.add(egui::TextEdit::singleline(&mut *link).password(true).hint_text("link iCal (https:// ou webcal://)").desired_width(300.0));
+                    if button(ui, "Adicionar link", true, acc).clicked() && !link.trim().is_empty() {
+                        add_link = true;
+                    }
+                });
+                if !list.iter().any(|c| c.kind == "outlook") && button(ui, "Adicionar o Outlook deste PC", false, acc).clicked() {
+                    add_outlook = true;
+                }
+                if let Some((m, err)) = CAL_MSG.lock().unwrap().clone() {
+                    ui.label(RichText::new(m).small().color(if err { theme::AMBER } else { theme::GREEN }));
+                }
+                ui.label(RichText::new("Google Calendar: Definições do calendário → \"Endereço secreto no formato iCal\". Outlook.com / Microsoft 365: Definições → Calendário → Calendários partilhados → Publicar um calendário → ICS. iCloud: partilhar o calendário → Calendário público. O link dá acesso de leitura ao calendário: fica cifrado neste PC.").small().color(theme::FAINT));
+            });
+        });
+    });
+    if let Some(i) = remove {
+        let mut l = list.clone();
+        l.remove(i);
+        set_calendars(l);
+        *CAL_MSG.lock().unwrap() = None;
+    }
+    if add_outlook {
+        let mut l = list.clone();
+        l.push(CalSource::outlook());
+        set_calendars(l);
+    }
+    if add_link {
+        let link = std::mem::take(&mut *LINK.lock().unwrap());
+        let name = std::mem::take(&mut *NAME.lock().unwrap());
+        let name = if name.trim().is_empty() { format!("Calendário {}", list.len() + 1) } else { name };
+        *CAL_MSG.lock().unwrap() = Some(("A verificar o link…".into(), false));
+        let ctx = ui.ctx().clone();
+        std::thread::spawn(move || {
+            *CAL_MSG.lock().unwrap() = Some(match crate::ics::check(&link) {
+                Ok(n) => {
+                    let mut l = profile::calendars();
+                    l.push(CalSource::ics(&name, &crate::ics::normalize_url(&link)));
+                    set_calendars(l);
+                    (format!("\"{}\" ligado ({n} eventos no calendário).", name.trim()), false)
+                }
+                Err(e) => (e, true),
+            });
+            ctx.request_repaint();
+        });
     }
 }

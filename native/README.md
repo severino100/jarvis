@@ -32,7 +32,7 @@ O `jarvis.exe` não precisa de nada ao lado: os guias genéricos (`docs/preparac
 
 | Ficheiro | O quê |
 | --- | --- |
-| `perfil.json` | nome, modos (`dev`, `rh`), blocos escondidos do Hoje, pasta dos projetos, pacotes de equipa e o token do board cifrado com a DPAPI do Windows |
+| `perfil.json` | nome, modos (`dev`, `rh`), blocos escondidos do Hoje, pasta dos projetos, pacotes de equipa, calendários ligados (os links iCal cifrados com a DPAPI) e o token do board cifrado com a DPAPI do Windows |
 | `eu\` | o que a pessoa ensina ao Jarvis (ver abaixo) |
 | `packs\` | os pacotes de equipa clonados do git |
 | `state-native.json` | definições e o que já foi visto no board e nos PRs |
@@ -187,3 +187,7 @@ As regras de permissão do `agy` só aceitam comandos exatos (`command(git statu
 - Os `with(...)` (board, PRs, conversas, voz) seguram um `Mutex` enquanto se desenha: nada dentro deles pode voltar a trancar o mesmo estado. `Board::refresh` e `Prs::refresh` só trancam na sua thread, por isso podem ser chamados de qualquer lado; as outras ações devolvem-se ao `app.rs` e correm depois do `with`.
 - Armadilhas do egui já resolvidas: `set_max_width` também alarga (usar `available_width().min(…)`); etiquetas com `truncate()` dentro de `Grid` precisam de largura explícita; o `glow` sem fontes do sistema não tem glifos como ◆ (os ícones são desenhados).
 - Com o `wgpu` gastava ~250 MB; o `glow` fica em ~140 MB, a maior parte do driver da placa gráfica.
+
+## Calendários
+
+Definições → Calendários: a agenda, os avisos de reunião e o Hoje juntam os calendários que a pessoa ligar (`Profile.calendars`; sem escolha feita conta como o Outlook clássico deste PC, como antes). Dois tipos, só leitura: **Outlook clássico** (`scripts/calendar.ps1` por COM) e **link iCal** (`ics.rs`), que serve o Google Calendar ("endereço secreto no formato iCal"), o Outlook.com e o Microsoft 365 ("publicar calendário", ICS), o iCloud, o Nextcloud ou o Proton. O link dá leitura a todo o calendário, por isso fica cifrado com a DPAPI. O `ics.rs` descarrega o feed (cache de 5 min), expande as recorrências com o crate `rrule` (com EXDATE e ocorrências movidas), traduz os fusos horários do Windows mais comuns e ignora eventos cancelados. Um calendário que falha não esconde os outros. Teste: `cargo test ics`.

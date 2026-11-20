@@ -36,6 +36,41 @@ pub struct Profile {
     /// person who never had a profile is guided.
     #[serde(default = "yes")]
     pub welcomed: bool,
+    /// The calendars the agenda reads. Missing (older profiles): the classic Outlook on this PC, as before.
+    pub calendars: Option<Vec<CalSource>>,
+}
+
+/// One calendar the agenda reads: the classic Outlook on this PC, or an iCalendar link.
+#[derive(Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct CalSource {
+    pub name: String,
+    /// "outlook" or "ics".
+    pub kind: String,
+    /// The .ics link, DPAPI-encrypted and base64 (the secret address gives read access to the whole calendar).
+    pub url: String,
+}
+
+impl CalSource {
+    pub fn outlook() -> Self {
+        Self { name: "Outlook neste PC".into(), kind: "outlook".into(), url: String::new() }
+    }
+    pub fn ics(name: &str, link: &str) -> Self {
+        use base64::Engine;
+        let url = crate::tasks::dpapi::protect(link.trim().as_bytes()).map(|b| base64::engine::general_purpose::STANDARD.encode(b)).unwrap_or_default();
+        Self { name: name.trim().into(), kind: "ics".into(), url }
+    }
+    /// The decrypted link of an ics source.
+    pub fn link(&self) -> Option<String> {
+        use base64::Engine;
+        let raw = base64::engine::general_purpose::STANDARD.decode(&self.url).ok()?;
+        crate::tasks::dpapi::unprotect(&raw).and_then(|b| String::from_utf8(b).ok())
+    }
+}
+
+/// The calendars in use: no choice made yet means the Outlook of this PC, as before.
+pub fn calendars() -> Vec<CalSource> {
+    get().calendars.unwrap_or_else(|| vec![CalSource::outlook()])
 }
 
 fn yes() -> bool {
@@ -54,6 +89,7 @@ impl Default for Profile {
             modes: vec![DEV.into()],
             today_hidden: Vec::new(),
             welcomed: true,
+            calendars: None,
         }
     }
 }

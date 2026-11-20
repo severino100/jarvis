@@ -2,6 +2,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod agenda;
+mod ics;
 mod app;
 mod azdo;
 mod cleanup;
