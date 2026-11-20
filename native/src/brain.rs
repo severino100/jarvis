@@ -175,7 +175,23 @@ fn home() -> PathBuf {
 
 fn claude_exe() -> PathBuf {
     let p = home().join(".local").join("bin").join("claude.exe");
-    if p.exists() { p } else { PathBuf::from("claude") }
+    if p.exists() {
+        return p;
+    }
+    // Installed with npm: the PATH has a claude.cmd shim, and the real claude.exe sits in its node_modules.
+    if let Some(path) = std::env::var_os("PATH") {
+        for d in std::env::split_paths(&path) {
+            let exe = d.join("claude.exe");
+            if exe.is_file() {
+                return exe;
+            }
+            if d.join("claude.cmd").is_file() {
+                let real = d.join("node_modules").join("@anthropic-ai").join("claude-code").join("bin").join("claude.exe");
+                return if real.is_file() { real } else { d.join("claude.cmd") };
+            }
+        }
+    }
+    PathBuf::from("claude")
 }
 
 // Installed outside AppData on purpose: AppData writes from the Claude app are virtualized (see scripts/restart.ps1).
