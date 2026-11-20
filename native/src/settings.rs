@@ -47,6 +47,8 @@ pub struct Settings {
     pub music_window: bool,
     /// The conversation of the Jarvis menu entry (the free talk).
     pub jarvis_chat: String,
+    /// The microphone the voice listens to, by the name Windows gives it; empty: the Windows default.
+    pub mic: String,
 }
 
 impl Default for Settings {
@@ -70,6 +72,7 @@ impl Default for Settings {
             music_links: String::new(),
             music_window: false,
             jarvis_chat: String::new(),
+            mic: String::new(),
         }
     }
 }

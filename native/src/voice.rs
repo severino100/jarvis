@@ -368,14 +368,7 @@ impl Voice {
 
     /// One utterance: waits for speech, records until a pause, returns 16 kHz mono. None when nothing was said.
     fn listen(&self) -> Result<Option<Vec<f32>>, String> {
-        let mic = MicrophoneBuilder::new()
-            .default_device()
-            .and_then(|b| b.default_config())
-            .map_err(|e| format!("Não encontrei o microfone ({e}). {MIC_HINT}"))?
-            .prefer_channel_counts([1.try_into().unwrap(), 2.try_into().unwrap()])
-            .prefer_sample_rates([16_000.try_into().unwrap(), 48_000.try_into().unwrap()])
-            .open_stream()
-            .map_err(|e| format!("Não consegui abrir o microfone ({e}). {MIC_HINT}"))?;
+        let mic = open_mic().map_err(|e| format!("Não consegui abrir o microfone ({e}). {MIC_HINT}"))?;
         let rate = mic.sample_rate().get();
         let ch = mic.channels().get() as usize;
         let frame = (rate as usize / 50).max(1);
@@ -917,7 +910,7 @@ pub fn diagnose() -> Vec<Check> {
 
 /// Dev aid (`jarvis --mic-test`): opens the microphone for a second and reports what it hears.
 pub fn mic_test() -> Result<String, String> {
-    let mic = MicrophoneBuilder::new().default_device().and_then(|b| b.default_config()).map_err(|e| e.to_string())?.open_stream().map_err(|e| e.to_string())?;
+    let mic = open_mic()?;
     let (rate, ch) = (mic.sample_rate().get(), mic.channels().get());
     let n = rate as usize * ch as usize * 4;
     let v: Vec<f32> = mic.into_iter().take(n).collect();
@@ -945,4 +938,38 @@ impl Voice {
             ];
         });
     }
+}
+
+/* ---------- choosing the microphone ---------- */
+
+/// The names of the microphones Windows offers (what Definições → Voz lets you pick from).
+pub fn mic_names() -> Vec<String> {
+    rodio::microphone::available_inputs().map(|v| v.iter().map(|i| i.to_string()).collect()).unwrap_or_default()
+}
+
+/// Opens the microphone chosen in Definições (the Windows default when none is chosen, or when the chosen one is not
+/// plugged in any more).
+fn open_mic() -> Result<rodio::microphone::Microphone, String> {
+    let wanted = crate::settings::load().mic;
+    let found = (!wanted.is_empty()).then(|| rodio::microphone::available_inputs().ok()).flatten().and_then(|v| v.into_iter().find(|i| i.to_string() == wanted));
+    let b = match found {
+        Some(i) => MicrophoneBuilder::new().device(i),
+        None => MicrophoneBuilder::new().default_device(),
+    }
+    .and_then(|b| b.default_config())
+    .map_err(|e| e.to_string())?;
+    b.prefer_channel_counts([1.try_into().unwrap(), 2.try_into().unwrap()])
+        .prefer_sample_rates([16_000.try_into().unwrap(), 48_000.try_into().unwrap()])
+        .open_stream()
+        .map_err(|e| e.to_string())
+}
+
+/// Listens for `secs` seconds to the chosen microphone: (average level, loudest 20 ms), 0..1.
+pub fn mic_level(secs: usize) -> Result<(f32, f32), String> {
+    let mic = open_mic()?;
+    let (rate, ch) = (mic.sample_rate().get() as usize, mic.channels().get() as usize);
+    let v: Vec<f32> = mic.into_iter().take(rate * ch * secs).collect();
+    let rms = |c: &[f32]| (c.iter().map(|x| x * x).sum::<f32>() / c.len().max(1) as f32).sqrt();
+    let loudest = v.chunks(((rate / 50) * ch).max(1)).map(rms).fold(0.0f32, f32::max);
+    Ok((rms(&v), loudest))
 }

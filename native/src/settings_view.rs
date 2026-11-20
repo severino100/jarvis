@@ -325,6 +325,8 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
             ui.label(RichText::new(if w { "Whisper pronto" } else { "Falta o Whisper (instalador)" }).color(if w { theme::GREEN } else { theme::AMBER }));
             ui.label(RichText::new(if p { "Voz Piper pronta" } else { "Falta a Piper (instalador)" }).color(if p { theme::GREEN } else { theme::AMBER }));
             voice_test(ui, acc);
+            ui.end_row();
+            mic_picker(ui, &mut s.mic, acc);
         });
     });
     ui.add_space(10.0);
@@ -363,7 +365,7 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
             }
         });
     });
-    if s.accent != before.accent || s.ui_scale != before.ui_scale || s.poll_minutes != before.poll_minutes || s.notify != before.notify || s.inform_chat != before.inform_chat || s.meeting_reminder != before.meeting_reminder || s.model != before.model || s.claude_model != before.claude_model || s.agy_model != before.agy_model || s.codex_model != before.codex_model || s.fallback != before.fallback || s.implement_model != before.implement_model || s.startup_sound != before.startup_sound || s.startup_sound_file != before.startup_sound_file || s.music_links != before.music_links {
+    if s.accent != before.accent || s.ui_scale != before.ui_scale || s.poll_minutes != before.poll_minutes || s.notify != before.notify || s.inform_chat != before.inform_chat || s.meeting_reminder != before.meeting_reminder || s.model != before.model || s.claude_model != before.claude_model || s.agy_model != before.agy_model || s.codex_model != before.codex_model || s.fallback != before.fallback || s.implement_model != before.implement_model || s.startup_sound != before.startup_sound || s.startup_sound_file != before.startup_sound_file || s.music_links != before.music_links || s.mic != before.mic {
         settings::update(|x| *x = s);
     }
     look
@@ -678,4 +680,73 @@ fn calendars_panel(ui: &mut Ui, acc: Accent) {
             ctx.request_repaint();
         });
     }
+}
+
+/// Which microphone the voice listens to, with a test that shows whether it hears anything.
+fn mic_picker(ui: &mut Ui, mic: &mut String, acc: Accent) {
+    use std::sync::Mutex;
+    static NAMES: Mutex<Option<Vec<String>>> = Mutex::new(None);
+    /// None: not tested; Some(None): listening; Some(Some(..)): the result.
+    static TEST: Mutex<Option<Option<Result<(f32, f32), String>>>> = Mutex::new(None);
+    let names = NAMES.lock().unwrap().get_or_insert_with(crate::voice::mic_names).clone();
+    ui.vertical(|ui| {
+        ui.horizontal_wrapped(|ui| {
+            ui.label(RichText::new("Microfone").color(theme::BRIGHT).strong());
+            let shown = if mic.is_empty() { "Predefinido do Windows".to_owned() } else { mic.clone() };
+            egui::ComboBox::from_id_salt("mic-choice").selected_text(shown).width(320.0).show_ui(ui, |ui| {
+                if ui.selectable_label(mic.is_empty(), "Predefinido do Windows").clicked() {
+                    mic.clear();
+                }
+                for n in &names {
+                    if ui.selectable_label(mic == n, n).clicked() {
+                        *mic = n.clone();
+                    }
+                }
+            });
+            if button(ui, "Atualizar a lista", false, acc).on_hover_text("Volta a ver os microfones ligados").clicked() {
+                *NAMES.lock().unwrap() = None;
+            }
+            let state = TEST.lock().unwrap().clone();
+            let listening = matches!(state, Some(None));
+            ui.add_enabled_ui(!listening, |ui| {
+                if button(ui, "Testar o microfone", false, acc).on_hover_text("Ouve 3 segundos: fala enquanto testa").clicked() {
+                    // The choice is read from the saved settings: save it first.
+                    let chosen = mic.clone();
+                    crate::settings::update(|x| x.mic = chosen);
+                    *TEST.lock().unwrap() = Some(None);
+                    let ctx = ui.ctx().clone();
+                    std::thread::spawn(move || {
+                        let r = crate::voice::mic_level(3);
+                        *TEST.lock().unwrap() = Some(Some(r));
+                        ctx.request_repaint();
+                    });
+                }
+            });
+        });
+        match TEST.lock().unwrap().clone() {
+            Some(None) => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(RichText::new("A ouvir… fala agora.").color(theme::MUTED));
+                });
+            }
+            Some(Some(Ok((_, loudest)))) => {
+                let (ok, msg) = if loudest < 0.002 {
+                    (false, "Não ouvi nada (silêncio). Escolhe outro microfone, ou vê se o Windows deixa as apps usar o microfone e se não está sem som.".to_owned())
+                } else if loudest < 0.02 {
+                    (true, format!("Ouvi, mas muito baixo (nível {loudest:.3}). Funciona: o Jarvis aumenta o volume. Aproxima-te ou sobe a entrada em Definições do Windows → Som."))
+                } else {
+                    (true, format!("Ouvi bem (nível {loudest:.3})."))
+                };
+                ui.label(RichText::new(msg).small().color(if ok { theme::GREEN } else { theme::AMBER }));
+                if !ok && button(ui, "Abrir a privacidade do microfone", true, acc).clicked() {
+                    crate::brain::open("ms-settings:privacy-microphone");
+                }
+            }
+            Some(Some(Err(e))) => {
+                ui.label(RichText::new(e).small().color(theme::AMBER));
+            }
+            None => {}
+        }
+    });
 }
