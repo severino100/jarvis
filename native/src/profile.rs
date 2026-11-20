@@ -32,6 +32,8 @@ pub struct Profile {
     pub modes: Vec<String>,
     /// Blocks of the Hoje screen this person turned off (see `dashboard::BLOCKS`); everything else shows.
     pub today_hidden: Vec<String>,
+    /// Menu entries this person hid (keys of `app::menu_entries`); Hoje and Definições always stay.
+    pub menu_hidden: Vec<String>,
     /// The guided first run is done (or was skipped). A profile file from before it existed reads as done: only a
     /// person who never had a profile is guided.
     #[serde(default = "yes")]
@@ -88,6 +90,7 @@ impl Default for Profile {
             board_token: String::new(),
             modes: vec![DEV.into()],
             today_hidden: Vec::new(),
+            menu_hidden: Vec::new(),
             welcomed: true,
             calendars: None,
         }
@@ -186,6 +189,10 @@ pub struct RepoCfg {
     pub main: bool,
     /// Worktrees get node_modules as a junction to the main folder's.
     pub link_node_modules: bool,
+    /// No per-item worktree: an item is a branch in the repository's main folder. For a back end that runs in Docker
+    /// Compose from that folder, where a worktree never reaches the containers. Antigravity's preparation then only
+    /// reads the folder's state and creates the branch (no switch); whoever implements switches to it.
+    pub branch_only: bool,
 }
 
 #[derive(Clone, Deserialize)]

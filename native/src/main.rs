@@ -214,6 +214,11 @@ fn main() -> eframe::Result {
         for rule in brain::read_remember(&said).iter().filter_map(|r| eu::remember(r)) {
             println!("Guardei em {}: {}", eu::memory_file().display(), rule.text);
         }
+        for s in brain::read_skills(&said) {
+            if let Some((slug, replaced)) = eu::save_skill(&s.name, &s.about, &s.body) {
+                println!("{} o comando /eu:{slug} em {}", if replaced.is_some() { "Atualizei" } else { "Criei" }, eu::skills_dir().join(&slug).display());
+            }
+        }
         return Ok(());
     }
     // Dev screenshots run next to the installed Jarvis.

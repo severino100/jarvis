@@ -472,6 +472,22 @@ fn mine_panel(ui: &mut Ui, acc: Accent) {
                 }
             }
         });
+        row(ui, "No menu", "Os ecrãs que ficam no menu à esquerda. Hoje e Definições ficam sempre; os do desenvolvimento só aparecem com esse modo.", |ui| {
+            let dev = p.modes.iter().any(|m| m == profile::DEV);
+            for (key, label, dev_only) in crate::app::menu_entries() {
+                if dev_only && !dev {
+                    continue;
+                }
+                let mut on = !p.menu_hidden.contains(&key);
+                if ui.checkbox(&mut on, label).changed() {
+                    if on {
+                        p.menu_hidden.retain(|h| *h != key);
+                    } else {
+                        p.menu_hidden.push(key);
+                    }
+                }
+            }
+        });
     });
     if p != before {
         profile::update(|x| *x = p);
@@ -551,6 +567,33 @@ fn mine_panel(ui: &mut Ui, acc: Accent) {
                 }
                 if let Some(t) = forget {
                     eu::forget(&t);
+                }
+            });
+        });
+        let examples = eu::examples();
+        row(ui, "Exemplos do teu estilo", "Quando editas um rascunho de email do Jarvis e o levas (Abrir no Outlook ou Copiar), a tua versão final fica aqui e o Jarvis escreve os próximos como ela. Ficam só os 5 mais recentes, neste PC; apaga os que tiverem dados que não queres guardar.", |ui| {
+            ui.vertical(|ui| {
+                if examples.is_empty() {
+                    ui.label(RichText::new("Ainda nenhum. Carrega em Editar num rascunho de email, muda o que quiseres e leva-o.").color(theme::MUTED));
+                }
+                let mut remove = None;
+                for (i, e) in examples.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(ui_kit::short_date(&format!("{}T12:00:00Z", e.date))).monospace().size(11.5).color(theme::FAINT));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if button(ui, "Apagar", false, acc).clicked() {
+                                remove = Some(i);
+                            }
+                            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                let first = e.body.lines().find(|l| !l.trim().is_empty()).unwrap_or_default();
+                                let head = if e.subject.is_empty() { first.to_owned() } else { format!("{} · {first}", e.subject) };
+                                ui.add(egui::Label::new(RichText::new(head).color(theme::TEXT)).truncate()).on_hover_text(&e.body);
+                            });
+                        });
+                    });
+                }
+                if let Some(i) = remove {
+                    eu::remove_example(i);
                 }
             });
         });

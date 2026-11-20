@@ -50,6 +50,9 @@ pub struct Msg {
     pub tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// A "skill" note: the SKILL.md it replaced (None: the skill is new), for "Desfazer".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replaced: Option<String>,
     #[serde(skip)]
     pub live: bool,
 }
@@ -100,7 +103,7 @@ impl Chat {
     }
     pub fn preview(&self) -> String {
         let m = self.messages.iter().rev().find(|m| matches!(m.role.as_str(), "assistant" | "user" | "inform"));
-        let t: String = m.map(|m| m.text.as_str()).unwrap_or_default().chars().map(|c| if "#*`|>_".contains(c) { ' ' } else { c }).collect();
+        let t: String = m.map(|m| m.text.replace("[[EMAIL]]", "").replace("[[/EMAIL]]", "")).unwrap_or_default().chars().map(|c| if "#*`|>_".contains(c) { ' ' } else { c }).collect();
         t.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(120).collect()
     }
 }
@@ -436,6 +439,16 @@ impl Chats {
     }
 
     /// "Desfazer" on a "Guardei: …" note: the rule leaves memoria.md and the note says so.
+    /// "Desfazer" on a "Criei o comando" note: the skill goes (or its previous version comes back).
+    pub fn undo_skill(&self, id: &str, msg_id: &str) {
+        self.edit(id, true, |c| {
+            if let Some(m) = c.messages.iter_mut().find(|m| m.id == msg_id && m.role == "skill") {
+                crate::eu::undo_skill(m.worktree.as_deref().unwrap_or_default(), m.replaced.as_deref());
+                m.role = "skill-undone".into();
+            }
+        });
+    }
+
     pub fn undo_remember(&self, id: &str, msg_id: &str) {
         self.edit(id, true, |c| {
             if let Some(m) = c.messages.iter_mut().find(|m| m.id == msg_id && m.role == "remembered") {
@@ -633,6 +646,7 @@ Mensagem de {}:
                 let (mut browser, mut implement) = (false, None);
                 let mut remember = Vec::new();
                 let mut new_tasks = Vec::new();
+                let mut new_skills = Vec::new();
                 for (k, m) in c.messages.iter_mut().enumerate() {
                     m.live = false;
                     for t in &mut m.tools {
@@ -648,6 +662,7 @@ Mensagem de {}:
                         }
                         remember.extend(brain::read_remember(&m.text));
                         new_tasks.extend(brain::read_tasks(&m.text));
+                        new_skills.extend(brain::read_skills(&m.text));
                         m.text = brain::strip_marks(&m.text);
                     }
                 }
@@ -663,6 +678,14 @@ Mensagem de {}:
                         let t = crate::tasks::add_from_chat(&title, due.clone());
                         let when = due.map(|d| format!(" (para {})", d.get(5..).unwrap_or(&d).replace('-', "/"))).unwrap_or_default();
                         c.messages.insert(before + j, Msg { worktree: Some(t.id), ..msg("task", format!("{title}{when}")) });
+                    }
+                    // "A partir de agora, quando eu disser…": a personal skill in eu\skills, with "Desfazer".
+                    let before = c.messages.len().saturating_sub(1);
+                    for (j, s) in new_skills.iter().enumerate() {
+                        if let Some((slug, replaced)) = crate::eu::save_skill(&s.name, &s.about, &s.body) {
+                            let text = if s.about.is_empty() { format!("/eu:{slug}") } else { format!("/eu:{slug}: {}", s.about) };
+                            c.messages.insert(before + j, Msg { worktree: Some(slug), replaced, ..msg("skill", text) });
+                        }
                     }
                 }
                 let before = c.messages.len().saturating_sub(1);
@@ -760,9 +783,10 @@ Mensagem de {}:
                 msg("user", "Escreve um email curto à Ana Costa a marcar a segunda entrevista para quinta às 10h. Lembra-te que assino sempre como Rita."),
                 Msg {
                     model: Some("claude".into()),
-                    ..msg("assistant", "Aqui está o rascunho:\n\n**Assunto:** Segunda entrevista: quinta-feira às 10h\n\nOlá Ana,\n\nObrigada pelo seu tempo na primeira conversa. Gostávamos de a convidar para uma segunda entrevista na quinta-feira, às 10h. Consegue confirmar se a hora lhe convém?\n\nCom os melhores cumprimentos,\nRita\n\nNão enviei nada: revê e envia tu pelo Outlook. Queres uma versão mais formal?")
+                    ..msg("assistant", "Aqui está o rascunho:\n\n[[EMAIL]]\nPara: ana.costa@exemplo.pt\nAssunto: Segunda entrevista: quinta-feira às 10h\n---\nOlá Ana,\n\nObrigada pelo seu tempo na primeira conversa. Gostávamos de a convidar para uma segunda entrevista na quinta-feira, às 10h. Consegue confirmar se a hora lhe convém?\n\nCom os melhores cumprimentos,\nRita\n[[/EMAIL]]\n\nNão enviei nada: revê e envia tu pelo Outlook. Queres uma versão mais formal?")
                 },
                 msg("remembered", "assina sempre os emails e mensagens como Rita"),
+                Msg { worktree: Some("triagem".into()), ..msg("skill", "/eu:triagem: Quando Rita disser 'triagem': avalia os perfis colados contra a vaga e faz uma tabela") },
                 msg("forgotten", "usa sempre o tratamento por você"),
                 Msg { tokens: Some(12100), ..msg("note", "Concluído em 6 s · 12,1 mil tokens · claude-sonnet") },
             ];

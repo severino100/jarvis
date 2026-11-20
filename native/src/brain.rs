@@ -175,7 +175,23 @@ fn home() -> PathBuf {
 
 fn claude_exe() -> PathBuf {
     let p = home().join(".local").join("bin").join("claude.exe");
-    if p.exists() { p } else { PathBuf::from("claude") }
+    if p.exists() {
+        return p;
+    }
+    // Installed with npm: the PATH has a claude.cmd shim, and the real claude.exe sits in its node_modules.
+    if let Some(path) = std::env::var_os("PATH") {
+        for d in std::env::split_paths(&path) {
+            let exe = d.join("claude.exe");
+            if exe.is_file() {
+                return exe;
+            }
+            if d.join("claude.cmd").is_file() {
+                let real = d.join("node_modules").join("@anthropic-ai").join("claude-code").join("bin").join("claude.exe");
+                return if real.is_file() { real } else { d.join("claude.cmd") };
+            }
+        }
+    }
+    PathBuf::from("claude")
 }
 
 // Installed outside AppData on purpose: AppData writes from the Claude app are virtualized (see scripts/restart.ps1).
@@ -580,6 +596,51 @@ pub fn codex_installed() -> bool {
     codex_exe().is_some()
 }
 
+/// Whether an installed engine has the person's account signed in, without spending any usage: `claude auth status`,
+/// `codex login status`, and Antigravity's saved Google sign-in. None when it cannot tell (not installed, or the
+/// command failed); the conversation still says what to do then.
+pub fn signed_in(engine: &str) -> Option<bool> {
+    let quiet = |mut c: Command| {
+        for (k, _) in std::env::vars() {
+            let up = k.to_uppercase();
+            if up.starts_with("CLAUDE") || up.starts_with("ANTHROPIC") {
+                c.env_remove(k);
+            }
+        }
+        c.creation_flags(CREATE_NO_WINDOW).stdin(Stdio::null()).output().ok()
+    };
+    match engine {
+        "claude" => {
+            if !claude_installed() {
+                return None;
+            }
+            let mut c = Command::new(claude_exe());
+            c.args(["auth", "status"]);
+            let o = quiet(c)?;
+            let j: Value = serde_json::from_slice(&o.stdout).ok()?;
+            j["loggedIn"].as_bool()
+        }
+        "codex" => {
+            let mut c = Command::new(codex_exe()?);
+            c.args(["login", "status"]);
+            let o = quiet(c)?;
+            let said = format!("{}{}", String::from_utf8_lossy(&o.stdout), String::from_utf8_lossy(&o.stderr)).to_lowercase();
+            Some(o.status.success() && said.contains("logged in") && !said.contains("not logged in"))
+        }
+        "antigravity" => {
+            agy_exe()?;
+            let creds = fs::read_to_string(home().join(".gemini").join("oauth_creds.json")).unwrap_or_default();
+            Some(creds.contains("refresh_token"))
+        }
+        _ => None,
+    }
+}
+
+/// Opens a terminal with the engine's sign-in (the person signs in there with their own account).
+pub fn open_sign_in(command: &str) {
+    let _ = Command::new("cmd.exe").args(["/c", "start", "Jarvis - iniciar sessão", "powershell.exe", "-NoExit", "-Command", command]).creation_flags(CREATE_NO_WINDOW).spawn();
+}
+
 /// Models the Codex CLI offers to this account (`codex debug models`, the listed ones), read once in the background.
 pub fn codex_models() -> Vec<(String, String)> {
     static LIST: OnceLock<Mutex<Vec<(String, String)>>> = OnceLock::new();
@@ -879,7 +940,41 @@ pub fn read_marks(text: &str) -> (bool, Option<String>) {
 }
 
 pub fn strip_marks(text: &str) -> String {
-    mark_re().replace_all(text, "").trim_end().to_owned()
+    let text = skill_re().replace_all(text, "");
+    mark_re().replace_all(&text, "").trim_end().to_owned()
+}
+
+/// A personal shortcut the reply asked Jarvis to create: [[SKILL: nome | quando usar]] instructions [[/SKILL]].
+#[derive(Clone, Debug, PartialEq)]
+pub struct NewSkill {
+    pub name: String,
+    pub about: String,
+    pub body: String,
+}
+
+fn skill_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?s)\[\[SKILL:\s*([^\]\n|]+)\|([^\]\n]*)\]\](.*?)\[\[/SKILL\]\]").unwrap())
+}
+
+pub fn read_skills(text: &str) -> Vec<NewSkill> {
+    skill_re()
+        .captures_iter(text)
+        .map(|c| NewSkill { name: c[1].trim().to_owned(), about: c[2].trim().to_owned(), body: c[3].trim().to_owned() })
+        .filter(|s| !s.name.is_empty() && !s.body.is_empty())
+        .collect()
+}
+
+/// While a reply is still arriving: a mark or a [[SKILL]] block that has not closed yet is not shown.
+pub fn hide_partial(text: &str) -> String {
+    let mut t = strip_marks(text);
+    if let Some(i) = t.find("[[SKILL:") {
+        t.truncate(i);
+    }
+    if let Some(i) = t.rfind("[[").filter(|i| !t[*i..].contains("]]")) {
+        t.truncate(i);
+    }
+    t
 }
 
 /// Claude CLI errors that mean "no usage left right now"; anything else is a real error and stays with Claude.
@@ -1077,7 +1172,6 @@ pub fn plan_file(id: i64) -> PathBuf {
 /// written out in full: these, and nothing else, can run. A reset, a checkout or a push stay blocked.
 pub fn prep_commands(p: &Prep) -> Vec<String> {
     use crate::profile;
-    let slash = |p: &Path| p.to_string_lossy().replace('\\', "/");
     let (id, branch, base) = (p.id, &p.branch, profile::branches().base);
     let mut out = Vec::new();
     if let Some(cli) = profile::skill_cli() {
@@ -1086,13 +1180,30 @@ pub fn prep_commands(p: &Prep) -> Vec<String> {
         out.push(format!("node {cli} apply {id} {plan}"));
     }
     for r in profile::repos() {
-        let (repo, wt) = (profile::repo_dir(&r), profile::worktree_dir(&r, id));
-        let (repo_s, wt_s) = (slash(&repo), slash(&wt));
-        out.push(format!("git -C {repo_s} fetch origin {base}"));
-        out.push(format!("git -C {repo_s} worktree add -b {branch} {wt_s} origin/{base}"));
-        if r.link_node_modules {
-            out.push(format!(r"cmd /c mklink /J {}\node_modules {}\node_modules", wt.display(), repo.display()));
-        }
+        out.extend(repo_prep_commands(&r, &profile::repo_dir(&r), &profile::worktree_dir(&r, id), branch, &base));
+    }
+    out
+}
+
+fn slash(p: &Path) -> String {
+    p.to_string_lossy().replace('\\', "/")
+}
+
+/// The preparation commands of one repository. Normally a worktree on a new branch; for a `branch_only` repository
+/// (its main folder is what runs, e.g. in Docker Compose) only reads the folder's state and creates the branch
+/// without switching to it: the folder must be clean to switch, and whoever implements does the switch.
+fn repo_prep_commands(r: &crate::profile::RepoCfg, repo: &Path, wt: &Path, branch: &str, base: &str) -> Vec<String> {
+    let repo_s = slash(repo);
+    let mut out = vec![format!("git -C {repo_s} fetch origin {base}")];
+    if r.branch_only {
+        out.push(format!("git -C {repo_s} status --porcelain"));
+        out.push(format!("git -C {repo_s} branch --show-current"));
+        out.push(format!("git -C {repo_s} branch {branch} origin/{base}"));
+        return out;
+    }
+    out.push(format!("git -C {repo_s} worktree add -b {branch} {} origin/{base}", slash(wt)));
+    if r.link_node_modules {
+        out.push(format!(r"cmd /c mklink /J {}\node_modules {}\node_modules", wt.display(), repo.display()));
     }
     out
 }
@@ -1104,8 +1215,14 @@ fn agy_settings(prep: Option<&Prep>) -> String {
 
 fn prep_text(p: &Prep) -> String {
     let list = prep_commands(p).iter().map(|c| format!("- `{c}`")).collect::<Vec<_>>().join("\n");
+    let branch_only: Vec<String> = crate::profile::repos().iter().filter(|r| r.branch_only).map(|r| r.side.clone()).collect();
+    let branch_only = if branch_only.is_empty() {
+        String::new()
+    } else {
+        format!("O lado {} não tem worktree: corre o `status --porcelain` e, só se vier vazio, cria o branch; não mudas para ele (quem implementa muda). ", branch_only.join(", "))
+    };
     format!(
-        "Comandos de preparação autorizados para o #{} (só estes correm; escreve-os exatamente assim, sem mudar nem acrescentar nada):\n{list}\n\n{}Corre só os do lado que o plano toca ({}), e só depois de um sim claro de {} nesta conversa.",
+        "Comandos de preparação autorizados para o #{} (só estes correm; escreve-os exatamente assim, sem mudar nem acrescentar nada):\n{list}\n\n{branch_only}{}Corre só os do lado que o plano toca ({}), e só depois de um sim claro de {} nesta conversa.",
         p.id,
         match crate::profile::skill_dir() {
             Some(d) if crate::profile::skill_cli().is_some() => format!("O plano para o apply vai em {} (no formato da skill {}). ", plan_file(p.id).display(), d.file_name().unwrap_or_default().to_string_lossy()),
@@ -1114,4 +1231,35 @@ fn prep_text(p: &Prep) -> String {
         crate::profile::repos().iter().map(|r| format!("{} = {}", r.side, if r.label.is_empty() { &r.dir } else { &r.label })).collect::<Vec<_>>().join(", "),
         crate::profile::name()
     )
+}
+
+#[cfg(test)]
+mod prep_tests {
+    use super::*;
+    use crate::profile::RepoCfg;
+
+    #[test]
+    fn a_worktree_repo_gets_a_worktree_and_a_branch_only_repo_does_not() {
+        let repo = Path::new(r"C:\p\App");
+        let wt = Path::new(r"C:\p\App-1");
+        let front = RepoCfg { link_node_modules: true, ..Default::default() };
+        let cmds = repo_prep_commands(&front, repo, wt, "feature/S1/1", "dev");
+        assert_eq!(cmds[0], "git -C C:/p/App fetch origin dev");
+        assert_eq!(cmds[1], "git -C C:/p/App worktree add -b feature/S1/1 C:/p/App-1 origin/dev");
+        assert!(cmds[2].starts_with("cmd /c mklink /J"));
+
+        let back = RepoCfg { branch_only: true, ..Default::default() };
+        let cmds = repo_prep_commands(&back, repo, wt, "feature/S1/1", "dev");
+        assert_eq!(
+            cmds,
+            [
+                "git -C C:/p/App fetch origin dev",
+                "git -C C:/p/App status --porcelain",
+                "git -C C:/p/App branch --show-current",
+                "git -C C:/p/App branch feature/S1/1 origin/dev",
+            ]
+        );
+        // Never a worktree, a switch or a checkout for a branch-only repository.
+        assert!(cmds.iter().all(|c| !c.contains("worktree") && !c.contains("switch") && !c.contains("checkout")));
+    }
 }
