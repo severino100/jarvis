@@ -91,6 +91,8 @@ pub enum AppEvent {
     Music(crate::music::Cmd),
     /// The music player in its own small window (true) or back on Hoje (false).
     MusicWindow(bool),
+    /// Opens (or brings to the front) the notifications window.
+    Notifications,
 }
 
 static POST: OnceLock<(Sender<AppEvent>, egui::Context)> = OnceLock::new();
@@ -115,6 +117,9 @@ pub struct JarvisApp {
     quitting: bool,
     started: Instant,
     hotkey_note: Option<String>,
+    /// The notifications window: open, and to be brought to the front on the next frame.
+    notif_open: bool,
+    notif_focus: bool,
     shot: Option<(PathBuf, bool, String)>,
     shot_done: Arc<AtomicBool>,
     chats: Chats,
@@ -205,6 +210,8 @@ impl JarvisApp {
             quitting: false,
             started: Instant::now(),
             hotkey_note,
+            notif_open: std::env::var("JARVIS_SHOT_VIEW").is_ok_and(|v| v == "notificacoes"),
+            notif_focus: false,
             shot: std::env::var("JARVIS_SHOT_RS").ok().map(|p| (PathBuf::from(p), false, shot_view.clone())),
             shot_done: Arc::new(AtomicBool::new(false)),
             chats: chats.clone(),
@@ -290,6 +297,10 @@ impl eframe::App for JarvisApp {
                 AppEvent::Repaint => {}
                 AppEvent::Music(c) => self.music.send(c),
                 AppEvent::MusicWindow(on) => settings::update(|s| s.music_window = on),
+                AppEvent::Notifications => {
+                    self.notif_open = true;
+                    self.notif_focus = true;
+                }
                 AppEvent::Hotkey | AppEvent::Voice => self.voice.toggle(),
                 AppEvent::Refresh => {
                     self.board.refresh();
@@ -324,7 +335,7 @@ impl eframe::App for JarvisApp {
                     self.board.refresh();
                     self.open_window(&id);
                     if let Some(title) = self.chats.with(|cs| cs.iter().find(|c| c.id == id).map(|c| c.title.clone())) {
-                        notify::notify("Pronto para implementar", &format!("{title}: escolhe Claude Code ou Antigravity."), AppEvent::OpenChat(id.clone()));
+                        notify::alert("Pronto para implementar", &format!("{title}: escolhe Claude Code ou Antigravity."), AppEvent::OpenChat(id.clone()));
                     }
                 }
                 ChatEvent::TurnEnd(id) => self.turn_ended(ctx, &id),
@@ -468,6 +479,7 @@ impl eframe::App for JarvisApp {
         self.chat_windows(&ctx, acc);
         self.voice_panel(&ctx, acc, t);
         self.music_window(&ctx, acc);
+        self.notifications_window(&ctx, acc);
     }
 }
 
@@ -596,6 +608,12 @@ impl JarvisApp {
                         self.view = view;
                     }
                 }
+                // Notifications are not a page: this opens their own window, with the number not yet read.
+                let unread = notify::unread();
+                if nav_item(ui, "Notificações", self.notif_open, Some(unread).filter(|n| *n > 0), false, acc).clicked() {
+                    self.notif_open = true;
+                    self.notif_focus = true;
+                }
                 let shown = motion::tween(ui.ctx(), egui::Id::unique("nav-highlight-alpha"), if active_rect.is_some() { 1.0 } else { 0.0 }, 0.2, 0.0);
                 if let Some(r) = active_rect.or_else(|| ui.ctx().data(|d| d.get_temp::<Rect>(egui::Id::unique("nav-highlight-last")))) {
                     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("nav-highlight-last"), r));
@@ -717,6 +735,10 @@ impl JarvisApp {
         let mut pack_do = None;
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             // Every page takes the whole width of the window: on a big screen the columns spread out and on a small one they stack.
+            // Dev aid: JARVIS_SHOT_VIEW=notificacoes with JARVIS_SHOT_RS draws the notifications list here, to photograph it.
+            if std::env::var("JARVIS_SHOT_RS").is_ok() && std::env::var("JARVIS_SHOT_VIEW").is_ok_and(|v| v == "notificacoes") {
+                return notifications_view(ui, acc);
+            }
             match self.view {
                 View::Agenda => return agenda::view(ui, &self.agenda, &mut self.agenda_ui, acc),
                 View::Tasks => return tasks::view(ui, &mut self.tasks_ui, acc),
@@ -865,7 +887,7 @@ impl JarvisApp {
         };
         let text: String = last.chars().filter(|c| !"#*`|>".contains(*c)).collect::<String>().split_whitespace().collect::<Vec<_>>().join(" ");
         let head = if error { format!("Erro em \"{title}\"") } else { format!("Jarvis respondeu: {title}") };
-        notify::notify(&head, if text.is_empty() { "Resposta pronta." } else { &text }, AppEvent::OpenChat(id.to_owned()));
+        notify::alert(&head, if text.is_empty() { "Resposta pronta." } else { &text }, AppEvent::OpenChat(id.to_owned()));
     }
 
     /// Work that runs every frame, cheaply: news from the board and the PRs, meeting reminders, cleaned items.
@@ -904,28 +926,20 @@ impl JarvisApp {
         }
     }
 
+    /// News from the board and the PRs go to the notifications list (and a toast); they no longer open conversations.
     fn apply_news(&mut self, news: Vec<events::News>) {
         if news.is_empty() {
             return;
         }
-        let s = settings::load();
-        let mut chat_ids = Vec::new();
-        if s.inform_chat {
-            for n in &news {
-                chat_ids.push(Some(self.chats.inform(n.item_id, n.pr_key.as_deref(), &n.chat_title, &n.chat)));
-            }
-            if let Some(Some(first)) = chat_ids.first() {
-                let first = first.clone();
-                self.open_window(&first);
-            }
-        } else {
-            chat_ids = news.iter().map(|_| None).collect();
+        let target = |n: &events::News| if n.pr_key.is_some() { "go:prs" } else if n.item_id.is_some() { "go:work" } else { "show" };
+        for n in &news {
+            notify::record(&n.title, &n.body, target(n));
         }
         if news.len() > 3 {
-            notify::notify(&format!("Jarvis: {} novidades", news.len()), &news.iter().map(|n| n.title.clone()).collect::<Vec<_>>().join(" · "), AppEvent::Show);
+            notify::alert(&format!("Jarvis: {} novidades", news.len()), &news.iter().map(|n| n.title.clone()).collect::<Vec<_>>().join(" · "), AppEvent::Notifications);
         } else {
-            for (n, id) in news.iter().zip(chat_ids) {
-                notify::notify(&n.title, &n.body, id.map(AppEvent::OpenChat).unwrap_or(AppEvent::Show));
+            for n in &news {
+                notify::alert(&n.title, &n.body, notify::event_of(target(n)));
             }
         }
     }
@@ -1051,6 +1065,28 @@ impl JarvisApp {
                 });
             });
         });
+    }
+
+    /// The notifications window: only for notifications, newest first. A click goes where the notification points.
+    fn notifications_window(&mut self, ctx: &egui::Context, acc: theme::Accent) {
+        if !self.notif_open {
+            return;
+        }
+        let builder = egui::ViewportBuilder::default().with_title("Jarvis · notificações").with_inner_size([460.0, 680.0]).with_min_inner_size([340.0, 320.0]);
+        let vid = egui::ViewportId::from_hash_of("notifications-window");
+        if std::mem::take(&mut self.notif_focus) {
+            ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Visible(true));
+            ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Minimized(false));
+            ctx.send_viewport_cmd_to(vid, egui::ViewportCommand::Focus);
+        }
+        let mut close = false;
+        ctx.show_viewport_immediate(vid, builder, |ui, _| {
+            close = ui.ctx().input(|i| i.viewport().close_requested());
+            egui::CentralPanel::default().frame(Frame::new().fill(theme::BG).inner_margin(Margin::same(16))).show(ui, |ui| notifications_view(ui, acc));
+        });
+        if close {
+            self.notif_open = false;
+        }
     }
 
     /// The voice panel: a small window always on top, bottom right, while a spoken conversation is on.
@@ -1762,4 +1798,60 @@ fn set_worktree_model(dir: &std::path::Path, model: &str) {
     v["model"] = serde_json::Value::String(model.to_owned());
     let _ = std::fs::create_dir_all(dir.join(".claude"));
     let _ = std::fs::write(&file, serde_json::to_string_pretty(&v).unwrap_or_default());
+}
+
+/// "há 5 min", "há 3 h" or the day.
+fn ago(at: i64) -> String {
+    let secs = chrono::Utc::now().timestamp() - at;
+    match secs {
+        s if s < 60 => "agora".to_owned(),
+        s if s < 3600 => format!("há {} min", s / 60),
+        s if s < 86400 => format!("há {} h", s / 3600),
+        _ => chrono::DateTime::from_timestamp(at, 0).map(|d| d.with_timezone(&chrono::Local).format("%d/%m %H:%M").to_string()).unwrap_or_default(),
+    }
+}
+
+/// The content of the notifications window.
+fn notifications_view(ui: &mut Ui, acc: theme::Accent) {
+    let list = notify::entries();
+    let unread = list.iter().filter(|e| !e.read).count();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("NOTIFICAÇÕES").heading().color(theme::BRIGHT).extra_letter_spacing(3.0));
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if !list.is_empty() && ui_kit::button(ui, "Limpar", false, acc).on_hover_text("Apaga a lista").clicked() {
+                notify::clear();
+            }
+            if unread > 0 && ui_kit::button(ui, "Marcar lidas", false, acc).clicked() {
+                notify::mark_all_read();
+            }
+        });
+    });
+    ui.label(RichText::new(if unread > 0 { format!("{unread} por ler") } else { "Tudo lido.".to_owned() }).small().color(theme::MUTED));
+    ui.add_space(8.0);
+    if list.is_empty() {
+        ui_kit::quiet(ui, "Sem notificações. As novidades do board, dos PRs e das reuniões aparecem aqui.", acc);
+        return;
+    }
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for e in &list {
+            let r = ui_kit::hud_panel(ui, acc, false, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    if !e.read {
+                        ui.label(RichText::new("●").small().color(acc.main));
+                    }
+                    ui.label(RichText::new(&e.title).strong().color(if e.read { theme::MUTED } else { theme::BRIGHT }));
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(ago(e.at)).small().color(theme::FAINT)));
+                });
+                if !e.body.is_empty() {
+                    ui.add(egui::Label::new(RichText::new(&e.body).small().color(theme::MUTED)).wrap());
+                }
+            });
+            if r.interact(Sense::click()).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                notify::mark_read(e.id);
+                post(notify::event_of(&e.target));
+            }
+            ui.add_space(6.0);
+        }
+    });
 }
