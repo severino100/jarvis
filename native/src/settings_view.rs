@@ -76,15 +76,19 @@ fn profile_panel(ui: &mut Ui, acc: Accent) {
         });
         row(ui, "Pacotes de equipa", "O pacote da tua equipa traz o board, os repositórios, as skills e os guias, iguais para todos. Normalmente é um repositório git privado: o Jarvis clona-o com a tua conta e atualiza-o ao arrancar. Sem pacote, o Jarvis funciona sem board.", |ui| {
             ui.vertical(|ui| {
-                let active = if p.active_pack.is_empty() { p.packs.first().cloned().unwrap_or_default() } else { p.active_pack.clone() };
                 for dir in p.packs.clone() {
                     ui.horizontal(|ui| {
                         let (name, err) = match profile::read_pack(std::path::Path::new(&dir)) {
                             Ok(pk) => (if pk.m.name.is_empty() { dir.clone() } else { pk.m.name }, None),
                             Err(e) => (dir.clone(), Some(e)),
                         };
-                        if ui.radio(dir == active, RichText::new(name).color(theme::BRIGHT)).on_hover_text("Usar este pacote").clicked() {
-                            p.active_pack = dir.clone();
+                        let mut on = p.active_packs.as_ref().is_some_and(|l| l.contains(&dir));
+                        if ui.checkbox(&mut on, RichText::new(name).color(theme::BRIGHT)).on_hover_text("Ligar ou desligar este pacote. Podes ter vários ligados: as skills e os guias juntam-se, por ordem; o board do ecrã Tarefas é o do primeiro com board.").changed() {
+                            let l = p.active_packs.get_or_insert_with(Vec::new);
+                            l.retain(|d| *d != dir);
+                            if on {
+                                l.push(dir.clone());
+                            }
                         }
                         ui.label(RichText::new(err.unwrap_or_else(|| dir.clone())).small().color(theme::FAINT));
                         if button(ui, "Remover", false, acc).clicked() {

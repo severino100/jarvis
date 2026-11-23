@@ -54,6 +54,8 @@ pub struct VoiceState {
     pub level: f32,
     pub log: Vec<Line>,
     pub chat_id: Option<String>,
+    /// Talking from the free conversation: everything goes to the AI (none of the board shortcuts).
+    pub free: bool,
 }
 
 #[derive(Clone)]
@@ -137,6 +139,7 @@ impl Voice {
         if whisper().is_none() {
             // No voice installed: the same panel, to write.
             self.set(|s| {
+                s.free = false;
                 s.visible = true;
                 s.phase = "idle";
                 s.status = "Escreve em baixo. Para falar, instala a voz (instalador do Jarvis).".into();
@@ -153,6 +156,20 @@ impl Voice {
         thread::spawn(move || me.session());
     }
 
+    /// The microphone button of a free conversation: starts a spoken conversation in that conversation (every
+    /// sentence goes to the AI, about any subject), or ends the one running.
+    pub fn talk_in(&self, id: &str) {
+        if self.with(|s| s.on) {
+            self.end();
+            return;
+        }
+        self.set(|s| {
+            s.chat_id = Some(id.to_owned());
+            s.free = true;
+        });
+        self.toggle();
+    }
+
     pub fn end(&self) {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(id) = self.with(|s| s.chat_id.clone()) {
@@ -162,6 +179,7 @@ impl Voice {
             s.on = false;
             s.phase = "idle";
             s.status = "Conversa terminada".into();
+            s.free = false;
             s.level = 0.0;
         });
     }
@@ -215,7 +233,7 @@ impl Voice {
     }
 
     fn session(&self) {
-        let mut convo = Convo::default();
+        let mut convo = Convo { engaged: self.with(|s| s.free), ..Default::default() };
         let mut idle_since = Instant::now();
         while !self.stopped() {
             self.status("listening", "A ouvir…");
@@ -771,7 +789,7 @@ fn understand_inner(text: &str, d: Option<&Dashboard>, ctx: &mut Convo) -> Reply
             Some(m) => format!(" {} campos por preencher, a começar pela {}.", plural(missing.len(), "tarefa tem", "tarefas têm"), m.id),
             None => " Está tudo preenchido.".into(),
         };
-        return Reply { view: Some(View::Hours), ..say(format!("Neste sprint tens {est} horas estimadas e {done} feitas, em {}.{tail}", plural(d.tasks.len(), "tarefa", "tarefas"))) };
+        return Reply { view: Some(View::Work), ..say(format!("Neste sprint tens {est} horas estimadas e {done} feitas, em {}.{tail}", plural(d.tasks.len(), "tarefa", "tarefas"))) };
     }
     if has(&["dias", "sprint", "acaba", "falta"]) {
         let left = crate::ui_kit::parse(&d.sprint.finish).map(|f| (f.date_naive() - chrono::Local::now().date_naive()).num_days().max(0)).unwrap_or(0);
@@ -785,13 +803,13 @@ fn understand_inner(text: &str, d: Option<&Dashboard>, ctx: &mut Convo) -> Reply
         }
         let warn = if d.now.is_empty() { String::new() } else { format!(" Mas ainda tens {} em curso ou planeados, por isso o Refined fica para depois.", plural(d.now.len(), "item", "itens")) };
         return Reply {
-            view: Some(View::Refined),
+            view: Some(View::Work),
             ..say(if d.refined.is_empty() { "O Refined está vazio.".into() } else { format!("Há {} livres no Refined. Os primeiros são {top}.{warn}", plural(d.refined.len(), "item", "itens")) })
         };
     }
     if has(&["revis", "review", "testar", "to test", "qa"]) {
         let cr = d.review.iter().filter(|i| i.column == "Code Review").count();
-        return Reply { view: Some(View::Review), ..say(format!("Tens {} em Code Review e {} à espera ou em teste de QA.", plural(cr, "item", "itens"), d.review.len() - cr)) };
+        return Reply { view: Some(View::Work), ..say(format!("Tens {} em Code Review e {} à espera ou em teste de QA.", plural(cr, "item", "itens"), d.review.len() - cr)) };
     }
     if has(&["para fazer", "o que tenho", "que ha para", "trabalho para", "pego a seguir", "proximo item", "bom dia", "boa tarde", "ola"]) {
         let greet = if has(&["bom dia"]) {
@@ -804,7 +822,7 @@ fn understand_inner(text: &str, d: Option<&Dashboard>, ctx: &mut Convo) -> Reply
             String::new()
         };
         if d.now.is_empty() {
-            return Reply { view: Some(View::Refined), ..say(format!("{greet}Não tens nada em curso nem planeado. Há {} livres no Refined.", plural(d.refined.len(), "item", "itens"))) };
+            return Reply { view: Some(View::Work), ..say(format!("{greet}Não tens nada em curso nem planeado. Há {} livres no Refined.", plural(d.refined.len(), "item", "itens"))) };
         }
         let prog = d.now.iter().filter(|i| i.column == "In Progress").count();
         let backs: Vec<&Item> = d.now.iter().filter(|i| i.back.is_some()).collect();
@@ -812,7 +830,7 @@ fn understand_inner(text: &str, d: Option<&Dashboard>, ctx: &mut Convo) -> Reply
         ctx.order = backs.iter().map(|i| i.id).chain(d.now.iter().filter(|i| i.back.is_none()).map(|i| i.id)).collect();
         let backs_text = if backs.is_empty() { String::new() } else { format!(" {}", backs.iter().map(|i| describe_back(i)).collect::<Vec<_>>().join(" ")) };
         return Reply {
-            view: Some(View::Now),
+            view: Some(View::Work),
             focus: Some(next.id),
             ..say(format!(
                 "{greet}Tens {} em curso e {}.{backs_text} Sugiro começares pelo {}: {}.",

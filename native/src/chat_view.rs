@@ -33,6 +33,8 @@ pub enum Action {
     UndoSkill(String, String),
     /// "Começar de novo" in the Jarvis page: a new free conversation (the old one stays in Chat).
     FreshJarvis,
+    /// The microphone button of a free conversation: talk in this conversation (or stop talking).
+    Voice(String),
 }
 
 #[derive(Default)]
@@ -46,6 +48,8 @@ pub struct ChatUi {
     pub confirm_delete: Option<String>,
     /// Short feedback after an action (e.g. "pedido copiado"), per conversation.
     pub flash: HashMap<String, (String, std::time::Instant)>,
+    /// A spoken conversation is on (set by the app each frame).
+    pub voice_on: bool,
 }
 
 /// Chat section of the main window: conversation list on the left, the selected conversation on the right.
@@ -229,6 +233,12 @@ fn header(ui: &mut Ui, c: &Chat, st: &mut ChatUi, acc: Accent, in_window: bool, 
             if !in_window && button(ui, "Janela", false, acc).on_hover_text("Abrir numa janela à parte").clicked() {
                 acts.push(Action::PopOut(c.id.clone()));
             }
+            if c.mode() == crate::profile::GERAL && !c.handed_off {
+                let label = if st.voice_on { "A ouvir · parar" } else { "Falar" };
+                if button(ui, label, !st.voice_on, acc).on_hover_text("Fala por voz neste assunto (o Jarvis responde em voz alta); diz \"obrigado\" para terminar. Também podes escrever.").clicked() {
+                    acts.push(Action::Voice(c.id.clone()));
+                }
+            }
             if !in_window && !c.busy && c.mode() == crate::profile::GERAL && !c.messages.is_empty() && button(ui, "Começar de novo", false, acc).on_hover_text("Uma conversa nova; esta fica em Chat").clicked() {
                 acts.push(Action::FreshJarvis);
             }
@@ -264,7 +274,15 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
                 // An [[EMAIL]] block is a draft card; the rest is text.
                 for (i, part) in crate::brain::split_emails(&m.text).into_iter().enumerate() {
                     match part {
-                        Err(text) => markdown::show(ui, &text, acc),
+                        Err(text) => {
+                            // A [[REVIEW]] draft is a card to approve, never published by itself.
+                            for (j, p) in crate::prs::split_reviews(&text).into_iter().enumerate() {
+                                match p {
+                                    Err(t) => markdown::show(ui, &t, acc),
+                                    Ok(d) => review_card(ui, c, &d, egui::Id::unique(("review-edit", &m.id, i, j)), acc),
+                                }
+                            }
+                        }
                         Ok(e) => email_card(ui, &e, egui::Id::unique(("email-edit", &m.id, i)), acc),
                     }
                 }
@@ -274,7 +292,7 @@ fn message(ui: &mut Ui, c: &Chat, m: &Msg, acc: Accent, acts: &mut Vec<Action>) 
             ui.horizontal(|ui| {
                 ui_kit::diamond(ui, true, theme::GREEN, 3.5);
                 ui.add(egui::Label::new(RichText::new(format!("Tarefa criada: {}", m.text)).size(12.5).color(theme::MUTED)).wrap());
-                if ui.add(egui::Label::new(RichText::new("Ver em Tarefas").size(12.5).underline().color(acc.light)).sense(Sense::click())).clicked() {
+                if ui.add(egui::Label::new(RichText::new("Ver em Pessoais").size(12.5).underline().color(acc.light)).sense(Sense::click())).clicked() {
                     crate::app::post(crate::app::AppEvent::Go(crate::app::View::Tasks));
                 }
             });
@@ -585,6 +603,91 @@ fn email_card(ui: &mut Ui, original: &crate::brain::Email, key: egui::Id, acc: A
     if let Some(e) = edit {
         ui.ctx().data_mut(|d| d.insert_temp(key, e));
     }
+}
+
+/// The review the Jarvis drafted for a PR: vote, general summary and comments, each one editable and removable.
+/// Nothing reaches the PR until "Publicar no PR" is clicked; a draft already published shows as done.
+fn review_card(ui: &mut Ui, c: &Chat, original: &crate::prs::ReviewDraft, key: egui::Id, acc: Accent) {
+    let pr_key = c.pr_key.clone().filter(|k| !k.is_empty()).unwrap_or_else(|| original.pr.clone());
+    let pub_key = crate::prs::draft_key(&pr_key, original);
+    let done = crate::prs::is_published(&pub_key);
+    // (draft, which comments stay)
+    let mut st: (crate::prs::ReviewDraft, Vec<bool>) = ui.ctx().data_mut(|d| d.get_temp(key)).unwrap_or_else(|| (original.clone(), vec![true; original.comments.len()]));
+    ui_kit::hud_panel(ui, acc, false, |ui| {
+        who(ui, if done { "REVIEW PUBLICADA" } else { "RASCUNHO DE REVIEW · POR APROVAR" }, if done { theme::GREEN } else { acc.main });
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Voto").small().color(theme::MUTED));
+            if done {
+                ui.label(RichText::new(crate::prs::vote_name(st.0.vote)).color(theme::BRIGHT));
+            } else {
+                egui::ComboBox::from_id_salt(key.with("vote")).selected_text(crate::prs::vote_name(st.0.vote)).show_ui(ui, |ui| {
+                    for v in [10, 5, 0, -5, -10] {
+                        ui.selectable_value(&mut st.0.vote, v, crate::prs::vote_name(v));
+                    }
+                });
+            }
+        });
+        ui.add_space(4.0);
+        if done {
+            if !st.0.summary.is_empty() {
+                ui.add(egui::Label::new(RichText::new(&st.0.summary).color(theme::TEXT)).wrap());
+            }
+        } else {
+            ui.label(RichText::new("Resumo geral (comentário no PR)").small().color(theme::MUTED));
+            ui.add(egui::TextEdit::multiline(&mut st.0.summary).desired_rows(2).desired_width(f32::INFINITY));
+        }
+        let mut kept = 0;
+        for (i, cm) in st.0.comments.iter_mut().enumerate() {
+            ui.add_space(6.0);
+            let on = st.1.get(i).copied().unwrap_or(true);
+            ui.horizontal(|ui| {
+                if !done {
+                    let mut on = on;
+                    if ui.checkbox(&mut on, "").changed() {
+                        st.1[i] = on;
+                    }
+                }
+                let place = match (&cm.file, cm.line) {
+                    (Some(f), Some(l)) => format!("{f}:{l}"),
+                    (Some(f), None) => f.clone(),
+                    _ => "Comentário geral".into(),
+                };
+                ui.label(RichText::new(place).monospace().size(12.0).color(if on { acc.light } else { theme::FAINT }));
+            });
+            if on {
+                kept += 1;
+                if done {
+                    ui.add(egui::Label::new(RichText::new(&cm.text).color(theme::TEXT)).wrap());
+                } else {
+                    ui.add(egui::TextEdit::multiline(&mut cm.text).desired_rows(2).desired_width(f32::INFINITY));
+                }
+            }
+        }
+        ui.add_space(8.0);
+        if done {
+            ui.label(RichText::new("Já está no PR.").small().color(theme::GREEN));
+        } else {
+            let state = crate::prs::publish_state(&pub_key);
+            let running = matches!(&state, Some(Ok(t)) if t == "…");
+            ui.horizontal(|ui| {
+                ui.add_enabled_ui(!running && !pr_key.is_empty(), |ui| {
+                    let label = format!("Publicar no PR ({kept} comentário{}{})", if kept == 1 { "" } else { "s" }, if st.0.vote != 0 { " e voto" } else { "" });
+                    if button(ui, &label, true, acc).on_hover_text("Só agora é que os comentários e o voto vão para o Azure DevOps").clicked() {
+                        let mut d = st.0.clone();
+                        d.comments = st.0.comments.iter().zip(&st.1).filter(|(_, on)| **on).map(|(c, _)| c.clone()).collect();
+                        crate::prs::publish(pub_key.clone(), pr_key.clone(), d, ui.ctx().clone());
+                    }
+                });
+                if running {
+                    crate::motion::spinner(ui, 14.0 + 2.0, acc.main);
+                }
+                if let Some(Err(e)) = &state {
+                    ui.label(RichText::new(format!("{e} Se alguns comentários já ficaram, não carregues outra vez sem ver o PR.")).small().color(theme::RED));
+                }
+            });
+        }
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(key, st));
 }
 
 /// Three dots that light up in turn while the reply is still being written.

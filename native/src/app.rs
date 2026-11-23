@@ -32,34 +32,30 @@ pub enum View {
     /// The free conversation: talk, tasks, emails (chat_view in the "geral" mode).
     Jarvis,
     Agenda,
+    /// The personal list (Notion and own tasks): "Pessoais" in the menu.
     Tasks,
-    Now,
+    /// The board in one page, "Tarefas" in the menu: mine in Refined, doing now, free to pick up, review and QA, hours.
+    Work,
     Prs,
-    Review,
-    Refined,
     Chat,
-    Hours,
     Cleanup,
+    /// A tab a team pack adds (`[[tab]]`): the index in `profile::pack_tabs`.
+    Pack(usize),
     Settings,
 }
 
-const NAV: [(View, &str); 11] = [
+const NAV: [(View, &str); 6] = [
     (View::Today, "Hoje"),
-    (View::Jarvis, "Jarvis"),
-    (View::Agenda, "Agenda"),
-    (View::Tasks, "Tarefas"),
-    (View::Now, "Agora"),
+    (View::Work, "Tarefas"),
+    (View::Tasks, "Pessoais"),
     (View::Prs, "PRs"),
-    (View::Review, "Revisão e QA"),
-    (View::Refined, "Refined livre"),
     (View::Chat, "Chat"),
-    (View::Hours, "Horas do sprint"),
     (View::Cleanup, "Limpeza"),
 ];
 
 /// Views of the development mode (board, PRs, hours, cleanup): not in the menu when that mode is off.
 fn dev_only(v: View) -> bool {
-    matches!(v, View::Now | View::Prs | View::Review | View::Refined | View::Hours | View::Cleanup)
+    matches!(v, View::Work | View::Prs | View::Cleanup)
 }
 
 /// The key a menu entry is saved under in `Profile.menu_hidden` ("agenda", "prs"…).
@@ -129,6 +125,7 @@ pub struct JarvisApp {
     prs: Prs,
     cleanup_ui: CleanupUi,
     hours_ui: views::HoursUi,
+    pack_ui: crate::pack_tab::PackUi,
     voice: Voice,
     reminded: std::collections::HashSet<String>,
     last_board: Option<Instant>,
@@ -156,17 +153,15 @@ pub struct JarvisApp {
 
 fn view_from(name: &str) -> View {
     match name {
-        "now" => View::Now,
-        "review" => View::Review,
-        "refined" => View::Refined,
-        "hours" => View::Hours,
-        "chat" | "chat-rh" => View::Chat,
+        "work" | "board" | "now" | "review" | "refined" | "hours" => View::Work,
+        "chat" | "chat-rh" | "chat-review" => View::Chat,
         "agenda" => View::Agenda,
         "tasks" => View::Tasks,
         "prs" => View::Prs,
         "cleanup" => View::Cleanup,
         "settings" => View::Settings,
         "jarvis" => View::Jarvis,
+        n if n.starts_with("pack") => View::Pack(n[4..].parse().unwrap_or(0)),
         "eu" => {
             settings_view::open_mine();
             View::Settings
@@ -199,6 +194,9 @@ impl JarvisApp {
         if shot_view == "chat" {
             chats.seed_demo();
         }
+        if shot_view == "chat-review" {
+            chats.seed_demo_review();
+        }
         let mut app = Self {
             view: view_from(&shot_view),
             acc,
@@ -217,6 +215,7 @@ impl JarvisApp {
             prs: Prs::start(cc.egui_ctx.clone(), poll),
             cleanup_ui: CleanupUi::default(),
             hours_ui: views::HoursUi::default(),
+            pack_ui: Default::default(),
             voice: Voice::new(cc.egui_ctx.clone(), chats.clone(), board),
             reminded: Default::default(),
             last_board: None,
@@ -365,6 +364,7 @@ impl eframe::App for JarvisApp {
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
         let acc = self.acc;
+        self.chat_ui.voice_on = self.voice.with(|v| v.on);
         // The reactor turns slowly; 30 fps is plenty and keeps the CPU quiet.
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
 
@@ -462,6 +462,9 @@ impl eframe::App for JarvisApp {
         if let Some((key, thread)) = prs::take_fix(&ctx) {
             self.fix_pr(&key, thread);
         }
+        if let Some(key) = prs::take_review(&ctx) {
+            self.review_pr(&key);
+        }
         self.chat_windows(&ctx, acc);
         self.voice_panel(&ctx, acc, t);
         self.music_window(&ctx, acc);
@@ -521,7 +524,7 @@ impl JarvisApp {
             ui.horizontal(|ui| {
                 let (rect, r) = ui.allocate_exact_size(vec2(52.0, 52.0), Sense::click());
                 paint_reactor(ui, rect, acc, t, energy, 1.0);
-                if r.on_hover_text("Falar com o Jarvis (Ctrl+Alt+J)").clicked() {
+                if r.on_hover_text("Falar com o Jarvis").clicked() {
                     talk = true;
                 }
                 ui.add_space(6.0);
@@ -567,12 +570,11 @@ impl JarvisApp {
                 let top = ui.min_rect().top();
                 let highlight = ui.painter().add(egui::Shape::Noop);
                 let mut active_rect = None;
-                for (view, label) in NAV.into_iter().filter(|(v, _)| shown(*v)) {
+                let entries: Vec<(View, String)> = NAV.into_iter().filter(|(v, _)| shown(*v)).map(|(v, l)| (v, l.to_owned())).chain(crate::profile::pack_tabs().into_iter().enumerate().map(|(i, t)| (View::Pack(i), t.title))).collect();
+                for (view, label) in entries {
+                    let label = label.as_str();
                     let count = d.and_then(|d| match view {
-                        View::Now => Some(d.now.len()),
-                        View::Review => Some(d.review.len()),
-                        View::Refined => Some(d.refined.len()),
-                        View::Hours => Some(d.tasks.len()),
+                        View::Work => Some(d.now.iter().filter(|i| i.owner.is_some()).count() + d.mine_refined.len()).filter(|n| *n > 0),
                         _ => None,
                     });
                     let count = count.or(match view {
@@ -583,8 +585,7 @@ impl JarvisApp {
                     });
                     let pr_alert = view == View::Prs && self.prs.with(|p| p.data.as_ref().is_some_and(|x| x.active.iter().any(|pr| !pr.open_threads.is_empty())));
                     let alert = d.is_some_and(|d| match view {
-                        View::Now => d.now.iter().any(|i| i.back.is_some()),
-                        View::Hours => d.tasks.iter().any(|t| !views::task_flags(t).is_empty()),
+                        View::Work => d.now.iter().any(|i| i.back.is_some()) || d.tasks.iter().any(|t| !views::task_flags(t).is_empty()),
                         _ => false,
                     });
                     let r = nav_item(ui, label, self.view == view, count, alert || pr_alert, acc);
@@ -616,15 +617,21 @@ impl JarvisApp {
             };
             let bottom = ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
                 ui.horizontal(|ui| {
-                    if dev && ui_kit::button(ui, "Atualizar", false, acc).clicked() {
-                        board.refresh();
-                    }
                     if ui_kit::button(ui, "Definições", false, acc).clicked() {
                         self.view = View::Settings;
                     }
                     let full = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
                     if fullscreen_button(ui, full, acc).on_hover_text(if full { "Sair do ecrã inteiro (F11 ou Esc)" } else { "Ecrã inteiro (F11)" }).clicked() {
                         ui.ctx().send_viewport_cmd(egui::ViewportCommand::Fullscreen(!full));
+                    }
+                });
+                // Agenda is a small button before "Atualizar", not a menu entry.
+                ui.horizontal(|ui| {
+                    if ui_kit::button(ui, "Agenda", self.view == View::Agenda, acc).on_hover_text("A tua semana, como no Teams").clicked() {
+                        self.view = View::Agenda;
+                    }
+                    if dev && ui_kit::button(ui, "Atualizar", false, acc).clicked() {
+                        board.refresh();
                     }
                 });
                 update_box(ui, acc);
@@ -653,7 +660,13 @@ impl JarvisApp {
             }
         });
         if talk {
-            self.voice.toggle();
+            // While a spoken conversation is on, it stops it; otherwise it opens the free conversation to write in
+            // (the microphone button is inside it).
+            if voice_on {
+                self.voice.toggle();
+            } else {
+                self.view = View::Jarvis;
+            }
         }
     }
 
@@ -661,18 +674,18 @@ impl JarvisApp {
         let (title, sub) = match self.view {
             View::Today => ("Hoje", ""),
             View::Agenda => ("Agenda", "A tua semana do Outlook, como no Teams. Clica numa reunião para os detalhes e para entrar no Teams."),
-            View::Tasks => ("Tarefas", "A tua lista pessoal e o que vem do Notion."),
-            View::Now => ("Agora", "Os teus In Progress primeiro, depois os Planned. Os que o QA devolveu aparecem com o comentário."),
-            View::Prs => ("PRs", "Os teus pull requests, os votos e os comentários do review. Corrigir abre uma conversa com o comentário."),
-            View::Review => ("Revisão e QA", "Os teus itens em Code Review, To Test e Testing (deste sprint ou mexidos nas últimas duas semanas)."),
-            View::Refined => ("Refined livre", "Itens refinados sem ninguém atribuído, pela ordem do backlog."),
+            View::Tasks => ("Pessoais", "A tua lista pessoal e o que vem do Notion."),
+            View::Work => ("Tarefas", "O board numa página: o que tens em Refined, o que estás a fazer, o que está livre para pegar, revisão e QA e as horas do sprint."),
+            View::Prs => ("PRs", "Os teus pull requests, os votos e os comentários do review (Corrigir abre uma conversa). Os que te pedem para rever: Rever com o Jarvis lê o diff com as regras da equipa e só publica depois de aprovares."),
             View::Chat if !crate::profile::dev() => ("Chat", "Escreve ou fala com o Jarvis: escreve, resume, analisa e propõe. Nada é enviado nem apagado sem o teu sim."),
             View::Chat => ("Chat", "A análise é feita aqui, por escrito ou por voz. A implementação segue para o Claude Code ou o Antigravity."),
-            View::Jarvis => ("Jarvis", "Fala à vontade, por escrito ou por voz: perguntas, ideias, piadas, tarefas e emails (em rascunho, para enviares tu)."),
-            View::Hours => ("Horas do sprint", "As tuas tarefas deste sprint: estimativa, Work Done e o que falta preencher."),
+            View::Jarvis => ("Falar com o Jarvis", "Escreve à vontade sobre o que quiseres, ou carrega em Falar para usar a voz: perguntas, ideias, tarefas e emails (em rascunho, para enviares tu)."),
+            View::Pack(_) => ("", ""),
             View::Cleanup => ("Limpeza", "Worktrees dos itens e anexos descarregados. Só limpa o que já não tem trabalho por enviar."),
-            View::Settings => ("Definições", "Cor, tamanho, avisos, quem responde e voz. O Notion está em Tarefas; o que é só teu, em O meu Jarvis."),
+            View::Settings => ("Definições", "Cor, tamanho, avisos, quem responde e voz. O Notion está em Pessoais; o que é só teu, em O meu Jarvis."),
         };
+        let head = if let View::Pack(i) = self.view { crate::profile::pack_tabs().get(i).map(|t| (t.title.clone(), t.about.clone())) } else { None };
+        let (title, sub) = head.as_ref().map(|(a, b)| (a.as_str(), b.as_str())).unwrap_or((title, sub));
         if self.view != View::Today {
             ui.label(RichText::new(title.to_uppercase()).heading().color(theme::BRIGHT).extra_letter_spacing(4.0));
             ui.label(RichText::new(sub).color(theme::MUTED));
@@ -701,6 +714,7 @@ impl JarvisApp {
         }
         let board = self.board.clone();
         let mut go = None;
+        let mut pack_do = None;
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             // Cap at 1600 like the CSS max-width; set_max_width alone would also widen a narrower window. Hoje takes the
             // whole width: on a big screen its columns spread out.
@@ -710,6 +724,13 @@ impl JarvisApp {
                 View::Agenda => return agenda::view(ui, &self.agenda, &mut self.agenda_ui, acc),
                 View::Tasks => return tasks::view(ui, &mut self.tasks_ui, acc),
                 View::Prs => return prs::view(ui, &self.prs, acc),
+                View::Pack(i) => {
+                    let sprint: String = board.with(|b| b.data.as_ref().map(|d| d.sprint.name.chars().filter(char::is_ascii_digit).collect()).unwrap_or_default());
+                    if let Some(t) = crate::profile::pack_tabs().get(i) {
+                        pack_do = crate::pack_tab::view(ui, t, &mut self.pack_ui, &sprint, acc);
+                    }
+                    return;
+                }
                 View::Cleanup => return cleanup::view(ui, &mut self.cleanup_ui, acc),
                 View::Settings => {
                     if settings_view::view(ui, acc, self.voice_ready()) {
@@ -747,10 +768,7 @@ impl JarvisApp {
                         let since = (motion::now(ui.ctx()) - self.view_at) as f32;
                         dashboard::view(ui, Some(d), &extras, acc, &mut go, since);
                     }
-                    View::Now => views::now(ui, d, acc),
-                    View::Review => views::review(ui, d, acc),
-                    View::Refined => views::refined(ui, d, acc),
-                    View::Hours => views::hours(ui, d, acc, &mut self.hours_ui, &board),
+                    View::Work => views::work(ui, d, acc, &mut self.hours_ui, &board),
                     _ => ui_kit::quiet(ui, "Esta secção ainda não existe.", acc),
                 }
             });
@@ -758,6 +776,15 @@ impl JarvisApp {
         });
         if let Some(v) = go {
             self.view = v;
+        }
+        match pack_do {
+            Some(crate::pack_tab::Do::Open(what)) => brain::open(&what),
+            Some(crate::pack_tab::Do::Ask(title, prompt)) => {
+                let id = self.chats.create(Some(title), None, None);
+                self.chats.send(&id, &prompt, false, chat::engine());
+                self.open_window(&id);
+            }
+            None => {}
         }
     }
 }
@@ -918,6 +945,22 @@ impl JarvisApp {
             None => self.chats.create(Some(format!("PR !{} {}", pr.id, pr.title)), None, Some(pr.key.clone())),
         };
         self.chats.send(&id, &prs::fix_prompt(&pr, thread), false, chat::engine());
+        self.open_window(&id);
+    }
+
+    /// "Rever com o Jarvis" on a PR that someone asked me to review: a conversation that reads the diff with the team's
+    /// review rules and ends with a draft (comments and vote) that is only published when I approve it in the card.
+    fn review_pr(&mut self, key: &str) {
+        let Some(pr) = self.prs.with(|p| p.data.as_ref().and_then(|d| d.to_review.iter().chain(&d.active).find(|x| x.key == key).cloned())) else { return };
+        let id = match self.chats.for_pr(&pr.key) {
+            Some(id) if self.chats.is_busy(&id) => {
+                self.open_window(&id);
+                return;
+            }
+            Some(id) => id,
+            None => self.chats.create(Some(format!("Review PR !{} {}", pr.id, pr.title)), None, Some(pr.key.clone())),
+        };
+        self.chats.send(&id, &prs::review_prompt(&pr), false, chat::engine());
         self.open_window(&id);
     }
 
@@ -1157,6 +1200,7 @@ impl JarvisApp {
                 Action::FreshJarvis => {
                     self.chats.jarvis_id(true);
                 }
+                Action::Voice(id) => self.voice.talk_in(&id),
                 Action::Select(id) => self.chat_ui.selected = Some(id),
                 Action::Send(id, text) => {
                     self.chats.send(&id, &text, false, chat::engine());
@@ -1196,7 +1240,7 @@ impl JarvisApp {
             return;
         }
         let title = self.board.with(|b| {
-            b.data.as_ref().and_then(|d| d.now.iter().chain(&d.review).chain(&d.refined).find(|i| i.id == id).map(|i| i.title.clone())).unwrap_or_default()
+            b.data.as_ref().and_then(|d| d.now.iter().chain(&d.review).chain(&d.refined).chain(&d.mine_refined).find(|i| i.id == id).map(|i| i.title.clone())).unwrap_or_default()
         });
         let engine = Some(chat::engine_of(&chat::engine().model)).filter(|e| chat::engine_installed(e)).unwrap_or("claude");
         self.start_choice = Some(StartChoice { id, title, engine: engine.into(), model: chat_view::default_model(engine), remember: false });
@@ -1311,7 +1355,7 @@ impl JarvisApp {
     fn item_branch(&self, id: i64) -> Option<String> {
         self.board.with(|b| {
             let d = b.data.as_ref()?;
-            let it = d.now.iter().chain(&d.review).chain(&d.refined).find(|i| i.id == id)?;
+            let it = d.now.iter().chain(&d.review).chain(&d.refined).chain(&d.mine_refined).find(|i| i.id == id)?;
             crate::profile::branch_for(&it.kind, &d.sprint.name, id)
         })
     }
@@ -1319,7 +1363,7 @@ impl JarvisApp {
     fn start_confirmed(&mut self, id: i64, engine: &str, model: &str) {
         let (title, prompt) = self.board.with(|b| {
             let d = b.data.as_ref();
-            let all = d.map(|d| d.now.iter().chain(&d.review).chain(&d.refined).collect::<Vec<_>>()).unwrap_or_default();
+            let all = d.map(|d| d.now.iter().chain(&d.review).chain(&d.refined).chain(&d.mine_refined).collect::<Vec<_>>()).unwrap_or_default();
             let it = all.iter().find(|i| i.id == id);
             let working = d.is_some_and(|d| d.now.iter().chain(&d.review).any(|x| x.id == id));
             let title = it.map(|i| format!("#{id} {}", i.title)).unwrap_or_else(|| format!("#{id}"));
@@ -1381,7 +1425,8 @@ impl JarvisApp {
         }
         let pack = handoff.exists();
         // The browser testing guide travels with every hand-off, so any AI tests the same way.
-        let tested = crate::profile::guide(crate::profile::Guide::Test).is_some_and(|g| std::fs::write(dir.join(".jarvis").join("TESTAR.md"), crate::profile::render(&std::fs::read_to_string(g).unwrap_or_default())).is_ok());
+        let test_guide = crate::profile::read_guide(crate::profile::Guide::Test);
+        let tested = !test_guide.is_empty() && std::fs::write(dir.join(".jarvis").join("TESTAR.md"), test_guide).is_ok();
         let prompt = format!(
             "Implementa o {title}. {}{}Trabalha só em {w}, segue o CLAUDE.md e as regras do repositório, e não faças commit nem push sem eu pedir.",
             if pack { "Lê primeiro o ficheiro .jarvis/HANDOFF.md deste workspace e as imagens em .jarvis/img/: tem a análise, o plano, como testar e as regras. " } else { "" },
@@ -1706,7 +1751,7 @@ fn voice_button(ui: &mut Ui, on: bool, acc: theme::Accent) -> egui::Response {
         ui_kit::display(12.5),
         theme::mix(theme::TEXT, theme::BRIGHT, h),
     );
-    resp.on_hover_text(if on { "Terminar a conversa por voz" } else { "Ctrl+Alt+J. Fala e o Jarvis responde em voz alta; diz \"obrigado\" para terminar." })
+    resp.on_hover_text(if on { "Terminar a conversa por voz" } else { "Abre a conversa livre: escreve ou, lá dentro, fala por voz. Ctrl+Alt+J fala logo." })
 }
 
 /// Puts `"model": "<model>"` in the worktree's .claude/settings.local.json (usually git-ignored), keeping whatever
