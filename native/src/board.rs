@@ -38,6 +38,12 @@ impl Board {
     /// Safe to call from anywhere, also from inside `with` (the drawing code does): the state is only locked on the
     /// background thread, never by the caller.
     pub fn refresh(&self) {
+        if let Some(d) = azdo::demo() {
+            let mut s = self.state.lock().unwrap();
+            s.data = Some(d);
+            s.fetched_at = Some(Instant::now());
+            return;
+        }
         let (state, ctx) = (self.state.clone(), self.ctx.clone());
         thread::spawn(move || {
             {

@@ -112,10 +112,10 @@ pub fn today(ui: &mut Ui, d: &Dashboard, acc: Accent, go: &mut Option<View>) {
     ui.horizontal(|ui| {
         {
             for (label, value, target, warn) in [
-                ("Em curso", d.now.len().to_string(), View::Now, false),
-                ("Devolvidos", back.to_string(), View::Now, back > 0),
-                ("Em revisão", d.review.len().to_string(), View::Review, false),
-                ("Horas", if flagged > 0 { flagged.to_string() } else { "ok".into() }, View::Hours, flagged > 0),
+                ("Em curso", d.now.len().to_string(), View::Work, false),
+                ("Devolvidos", back.to_string(), View::Work, back > 0),
+                ("Em revisão", d.review.len().to_string(), View::Work, false),
+                ("Horas", if flagged > 0 { flagged.to_string() } else { "ok".into() }, View::Work, flagged > 0),
             ] {
                 let c = if warn { theme::AMBER } else { acc.light };
                 let r = Frame::new()
@@ -257,17 +257,14 @@ fn task_table(ui: &mut Ui, tasks: &[Task], acc: Accent) {
     });
 }
 
-pub fn now(ui: &mut Ui, d: &Dashboard, acc: Accent) {
-    if d.now.is_empty() {
-        quiet(ui, "Nada em In Progress nem em Planned. Podes ir ao Refined e pegar num item para este sprint.", acc);
-        return;
-    }
-    let back = d.now.iter().filter(|i| i.back.is_some()).count();
+/// The full card of each item being worked on (with the QA comments of those sent back and their tasks).
+fn now_panels(ui: &mut Ui, d: &Dashboard, items: &[&Item], acc: Accent) {
+    let back = items.iter().filter(|i| i.back.is_some()).count();
     if back > 0 {
         hint(ui, &format!("{back} {} pelo QA. Lê os comentários antes de pegar neles.", if back > 1 { "itens foram devolvidos" } else { "item foi devolvido" }), true, acc);
         ui.add_space(8.0);
     }
-    for it in &d.now {
+    for it in items.iter().copied() {
         hud_panel(ui, acc, it.back.is_some(), |ui| {
             ui.horizontal_wrapped(|ui| {
                 type_pill(ui, &it.kind, acc);
@@ -337,7 +334,7 @@ pub fn now(ui: &mut Ui, d: &Dashboard, acc: Accent) {
     }
 }
 
-pub fn review(ui: &mut Ui, d: &Dashboard, acc: Accent) {
+fn review(ui: &mut Ui, d: &Dashboard, acc: Accent) {
     if d.review.is_empty() {
         quiet(ui, "Nada à espera de revisão ou QA. Quando tiveres itens em Code Review ou To Test aparecem aqui.", acc);
         return;
@@ -366,41 +363,157 @@ pub fn review(ui: &mut Ui, d: &Dashboard, acc: Accent) {
     }
 }
 
-pub fn refined(ui: &mut Ui, d: &Dashboard, acc: Accent) {
-    if !d.now.is_empty() {
-        hint(ui, &format!("Ainda tens {} {} em Agora. O Refined só entra quando In Progress e Planned estiverem vazios.", d.now.len(), if d.now.len() > 1 { "itens" } else { "item" }), true, acc);
-        ui.add_space(8.0);
+/// "Effort 3 · P2 · Major · por Ana": the line under a Refined item.
+fn refined_sub(it: &Item) -> String {
+    let mut parts = vec![it.effort.map(|e| format!("Effort {}", num(Some(e)))).unwrap_or_else(|| "Sem effort".into())];
+    if let Some(p) = it.priority {
+        parts.push(format!("P{p}"));
     }
-    if d.refined.is_empty() {
-        quiet(ui, "Refined vazio: não há itens refinados sem dono.", acc);
+    if let Some(s) = &it.severity {
+        parts.push(s.clone());
+    }
+    if let Some(c) = &it.created_by {
+        parts.push(format!("por {c}"));
+    }
+    parts.join(" · ")
+}
+
+/// The sections of the "Tarefas" page (the board): what the chips at the top filter.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum Section {
+    #[default]
+    All,
+    Mine,
+    Doing,
+    Free,
+    Review,
+    Hours,
+}
+
+/// "Tarefas": everything on the board in one page, in sections: Refined assigned to me, what I am doing now, what is free
+/// to pick up (Planned in the sprint, or Refined outside it), Revisão e QA and Horas do sprint.
+pub fn work(ui: &mut Ui, d: &Dashboard, acc: Accent, st: &mut HoursUi, board: &crate::board::Board) {
+    // The column of what I am doing is the first of the board's `working` (the pack decides the names).
+    let doing_col = crate::profile::board().and_then(|b| b.working.first().cloned()).unwrap_or_else(|| "In Progress".into());
+    let doing: Vec<&Item> = d.now.iter().filter(|i| i.owner.is_some() && (i.column == doing_col || i.back.is_some())).collect();
+    let planned_mine: Vec<&Item> = d.now.iter().filter(|i| i.owner.is_some() && i.column != doing_col && i.back.is_none()).collect();
+    let free_planned: Vec<&Item> = d.now.iter().filter(|i| i.owner.is_none()).collect();
+    let free_n = free_planned.len() + d.refined.len();
+    let flagged = d.tasks.iter().filter(|t| !task_flags(t).is_empty()).count();
+
+    ui.set_max_width(ui.available_width() - 14.0);
+    // The numbers on top are also the filter: click one to open that section alone, click it again to see the board.
+    let est: f64 = d.tasks.iter().filter_map(|t| t.estimate).sum();
+    let done: f64 = d.tasks.iter().filter_map(|t| t.work_done).sum();
+    let back = d.now.iter().filter(|i| i.back.is_some()).count();
+    let tiles = [
+        (Section::Mine, "Refined meus", d.mine_refined.len().to_string(), String::new(), false),
+        (Section::Doing, "A fazer", (doing.len() + planned_mine.len()).to_string(), if back > 0 { format!("{back} devolvido{} pelo QA", if back > 1 { "s" } else { "" }) } else { format!("{} em curso", doing.len()) }, back > 0),
+        (Section::Free, "Livres", free_n.to_string(), format!("{} Planned · {} Refined", free_planned.len(), d.refined.len()), false),
+        (Section::Review, "Revisão e QA", d.review.len().to_string(), String::new(), false),
+        (Section::Hours, "Horas", if flagged > 0 { flagged.to_string() } else { "ok".into() }, format!("{} h de {} h", num(Some(done)), num(Some(est))), flagged > 0),
+    ];
+    ui.columns(tiles.len(), |cols| {
+        for (col, (s, label, value, sub, warn)) in cols.iter_mut().zip(tiles) {
+            if stat_tile(col, acc, label, &value, &sub, warn, st.section == s).clicked() {
+                st.section = if st.section == s { Section::All } else { s };
+            }
+        }
+    });
+    ui.add_space(14.0);
+    if st.section == Section::All {
+        let cols_n = if ui.available_width() > 1150.0 { 4 } else { 2 };
+        let mine: Vec<(&Item, String, bool)> = d.mine_refined.iter().map(|it| (it, refined_sub(it), false)).collect();
+        let now_cards: Vec<(&Item, String, bool)> = doing
+            .iter()
+            .chain(planned_mine.iter())
+            .map(|it| match &it.back {
+                Some(b) => (*it, format!("Devolvido pelo QA ({}, {})", b.by, when(&b.at)), true),
+                None => (*it, it.column.clone(), false),
+            })
+            .collect();
+        let free: Vec<(&Item, String, bool)> = free_planned
+            .iter()
+            .map(|it| (*it, format!("{} · sem dono", it.column), false))
+            .chain(d.refined.iter().map(|it| (it, format!("{}{} · {}", it.column, if it.in_sprint { String::new() } else { " · fora do sprint".to_owned() }, refined_sub(it)), false)))
+            .collect();
+        let rev: Vec<(&Item, String, bool)> = d
+            .review
+            .iter()
+            .map(|it| (it, format!("{} · {}", it.column, it.last_comment.as_ref().map(|c| format!("{}: {}", c.by, if c.text.is_empty() { "(imagem)" } else { &c.text })).unwrap_or_else(|| format!("alterado {}", when(&it.changed_at)))), false))
+            .collect();
+        let groups: [(&str, &Vec<(&Item, String, bool)>); 4] = [("Refined meus", &mine), ("A fazer agora", &now_cards), ("Livres para pegar", &free), ("Revisão e QA", &rev)];
+        for row in groups.chunks(cols_n) {
+            ui.columns(cols_n, |cols| {
+                for (col, (title, cards)) in cols.iter_mut().zip(row) {
+                    board_column(col, acc, title, cards);
+                }
+            });
+            ui.add_space(14.0);
+        }
         return;
     }
-    list(
-        ui,
-        acc,
-        d.refined
-            .iter()
-            .map(|it| -> Box<dyn FnOnce(&mut Ui)> {
-                let mut parts = vec![it.effort.map(|e| format!("Effort {}", num(Some(e)))).unwrap_or_else(|| "Sem effort".into())];
-                if let Some(p) = it.priority {
-                    parts.push(format!("P{p}"));
-                }
-                if let Some(s) = &it.severity {
-                    parts.push(s.clone());
-                }
-                if let Some(c) = &it.created_by {
-                    parts.push(format!("por {c}"));
-                }
-                let sub = parts.join(" · ");
-                Box::new(move |ui| item_line(ui, it, acc, &sub, theme::MUTED))
-            })
-            .collect(),
-    );
+    let show = |s: Section| st.section == s;
+
+    if show(Section::Mine) {
+        section_label(ui, &format!("Atribuídas a mim em Refined · {}", d.mine_refined.len()), acc.main, acc);
+        if d.mine_refined.is_empty() {
+            quiet(ui, "Nenhum item refinado está atribuído a ti.", acc);
+        } else {
+            list(ui, acc, d.mine_refined.iter().map(|it| -> Box<dyn FnOnce(&mut Ui)> { let sub = refined_sub(it); Box::new(move |ui| item_line(ui, it, acc, &sub, theme::MUTED)) }).collect());
+        }
+        ui.add_space(14.0);
+    }
+    if show(Section::Doing) {
+        section_label(ui, &format!("A fazer agora · {}", doing.len()), acc.main, acc);
+        if doing.is_empty() {
+            quiet(ui, "Nada em In Progress. Pega num item das listas de baixo.", acc);
+        } else {
+            now_panels(ui, d, &doing, acc);
+        }
+        if !planned_mine.is_empty() {
+            section_label(ui, &format!("Planeadas para mim · {}", planned_mine.len()), acc.main, acc);
+            list(ui, acc, planned_mine.iter().map(|it| -> Box<dyn FnOnce(&mut Ui)> { Box::new(move |ui| item_line(ui, it, acc, &it.column, theme::MUTED)) }).collect());
+        }
+        ui.add_space(14.0);
+    }
+    if show(Section::Free) {
+        section_label(ui, &format!("Livres para pegar · {free_n}"), acc.main, acc);
+        if !doing.is_empty() || !planned_mine.is_empty() {
+            hint(ui, &format!("Ainda tens {} {} em curso ou planeados; o resto só entra depois.", doing.len() + planned_mine.len(), if doing.len() + planned_mine.len() > 1 { "itens" } else { "item" }), false, acc);
+            ui.add_space(8.0);
+        }
+        if free_n == 0 {
+            quiet(ui, "Nada livre: nem Planned sem dono neste sprint, nem Refined sem dono.", acc);
+        } else {
+            let rows: Vec<Box<dyn FnOnce(&mut Ui) + '_>> = free_planned
+                .iter()
+                .map(|it| -> Box<dyn FnOnce(&mut Ui)> { Box::new(move |ui| item_line(ui, it, acc, &format!("{} · {} · sem dono", it.column, d.sprint.name), theme::MUTED)) })
+                .chain(d.refined.iter().map(|it| -> Box<dyn FnOnce(&mut Ui)> {
+                    let sub = format!("{}{} · {}", it.column, if it.in_sprint { String::new() } else { format!(" · fora do {}", d.sprint.name) }, refined_sub(it));
+                    Box::new(move |ui| item_line(ui, it, acc, &sub, theme::MUTED))
+                }))
+                .collect();
+            list(ui, acc, rows);
+        }
+        ui.add_space(14.0);
+    }
+    if show(Section::Review) {
+        section_label(ui, &format!("Revisão e QA · {}", d.review.len()), acc.main, acc);
+        review(ui, d, acc);
+        ui.add_space(14.0);
+    }
+    if show(Section::Hours) {
+        section_label(ui, "Horas do sprint", acc.main, acc);
+        hours(ui, d, acc, st, board);
+    }
 }
 
 /// Inline form to fill a task's missing fields (Work Done, Estimate, Activity) straight in Azure DevOps.
 #[derive(Default)]
 pub struct HoursUi {
+    /// The section chip chosen on the Tarefas page.
+    pub section: Section,
     inputs: std::collections::HashMap<i64, (String, String, bool)>,
     status: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<i64, (bool, String)>>>,
 }
@@ -479,7 +592,7 @@ fn fix_row(ui: &mut Ui, t: &Task, fix: &mut HoursUi, board: &crate::board::Board
     ui.add_space(6.0);
 }
 
-pub fn hours(ui: &mut Ui, d: &Dashboard, acc: Accent, fix: &mut HoursUi, board: &crate::board::Board) {
+fn hours(ui: &mut Ui, d: &Dashboard, acc: Accent, fix: &mut HoursUi, board: &crate::board::Board) {
     let tasks = &d.tasks;
     if tasks.is_empty() {
         quiet(ui, "Sem tarefas neste sprint. As tarefas que criares aparecem aqui com as horas.", acc);
@@ -586,4 +699,59 @@ fn counted(ui: &Ui, salt: &str, value: &str) -> String {
     let whole = !digits.contains(['.', ',']);
     let text = if whole { format!("{}", shown.round() as i64) } else { format!("{shown:.1}").replace('.', ",") };
     format!("{text}{}", &value[digits.len()..])
+}
+
+/// A number with its label, clickable: the tiles at the top of Tarefas.
+fn stat_tile(ui: &mut Ui, acc: Accent, label: &str, value: &str, sub: &str, warn: bool, selected: bool) -> egui::Response {
+    let c = if warn { theme::AMBER } else { acc.light };
+    let edge = if warn { theme::alpha(theme::AMBER, 0.42) } else if selected { theme::alpha(acc.main, 0.8) } else { theme::alpha(acc.main, 0.18) };
+    Frame::new()
+        .fill(if selected { theme::alpha(acc.main, 0.13) } else { theme::GLASS })
+        .stroke(Stroke::new(if selected { 1.5 } else { 1.0 }, edge))
+        .corner_radius(CornerRadius::same(4))
+        .inner_margin(Margin::symmetric(14, 10))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.set_min_height(66.0);
+            ui.label(RichText::new(label.to_uppercase()).font(display(11.0)).color(theme::MUTED).extra_letter_spacing(1.2));
+            ui.label(RichText::new(counted(ui, label, value)).monospace().size(theme::size::STAT).strong().color(c));
+            ui.add(egui::Label::new(RichText::new(sub).small().color(theme::MUTED)).truncate());
+        })
+        .response
+        .interact(Sense::click())
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+}
+
+/// One column of the board on Tarefas: a title with its count and a compact card per item.
+fn board_column(ui: &mut Ui, acc: Accent, title: &str, cards: &[(&Item, String, bool)]) {
+    section_label(ui, &format!("{title} · {}", cards.len()), acc.main, acc);
+    if cards.is_empty() {
+        quiet(ui, "Nada aqui.", acc);
+        return;
+    }
+    for (it, sub, warn) in cards.iter().take(8) {
+        Frame::new()
+            .fill(theme::GLASS)
+            .stroke(Stroke::new(1.0, if *warn { theme::alpha(theme::AMBER, 0.42) } else { theme::alpha(acc.main, 0.14) }))
+            .corner_radius(CornerRadius::same(4))
+            .inner_margin(Margin::symmetric(12, 9))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    type_pill(ui, &it.kind, acc);
+                    id_link(ui, it.id, &it.url, acc);
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| start_button(ui, it.id, false, acc));
+                });
+                ui.add(egui::Label::new(RichText::new(&it.title).strong().color(theme::BRIGHT)).wrap());
+                ui.add(egui::Label::new(RichText::new(sub).small().color(if *warn { theme::AMBER } else { theme::MUTED })).truncate());
+                if !it.tasks.is_empty() {
+                    let done = it.tasks.iter().filter(|t| t.state == "Done").count();
+                    ui.add(egui::ProgressBar::new(done as f32 / it.tasks.len() as f32).desired_height(4.0).fill(acc.main));
+                }
+            });
+        ui.add_space(6.0);
+    }
+    if cards.len() > 8 {
+        ui.label(RichText::new(format!("+ {} (abre a secção)", cards.len() - 8)).small().color(theme::FAINT));
+    }
 }

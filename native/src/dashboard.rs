@@ -44,7 +44,7 @@ pub const BLOCKS: [(&str, &str, bool); 10] = [
     ("nucleo", "Núcleo (sprint e horas)", true),
     ("agenda", "Agenda de hoje", false),
     ("conversas", "Conversas", false),
-    ("tarefas", "Tarefas", false),
+    ("tarefas", "Pessoais", false),
     ("sistema", "Sistema", false),
     ("musica", "Música", false),
     ("prs", "PRs", true),
@@ -266,7 +266,7 @@ fn core(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<Vie
     if !x.on("nucleo") {
         return;
     }
-    heading(ui, "Núcleo", acc, Some(View::Hours), go);
+    heading(ui, "Núcleo", acc, Some(View::Work), go);
     let now = Local::now();
     let sprint = match (ui_kit::parse(&d.sprint.start), ui_kit::parse(&d.sprint.finish)) {
         (Some(s), Some(f)) => ((now - s).num_seconds() as f32 / ((f - s).num_seconds() as f32 + 86400.0)).clamp(0.0, 1.0),
@@ -517,7 +517,7 @@ fn review(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<V
     if !x.on("revisao") {
         return;
     }
-    heading(ui, "Revisão e QA", acc, Some(View::Review), go);
+    heading(ui, "Revisão e QA", acc, Some(View::Work), go);
     panel(ui, acc, |ui| {
         let total = d.review.len().max(1) as f32;
         for col in ["Code Review", "To Test", "Testing"] {
@@ -542,7 +542,7 @@ fn todos(ui: &mut Ui, x: &Extras, acc: Accent, go: &mut Option<View>) {
     if !x.on("tarefas") {
         return;
     }
-    heading(ui, "Tarefas", acc, Some(View::Tasks), go);
+    heading(ui, "Pessoais", acc, Some(View::Tasks), go);
     panel(ui, acc, |ui| {
         if x.todos.is_empty() {
             ui.label(RichText::new("Sem tarefas pessoais abertas.").color(theme::MUTED));
@@ -627,7 +627,7 @@ fn mine(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Option<Vie
     let mut mine: Vec<&Item> = d.now.iter().collect();
     mine.sort_by_key(|i| (i.back.is_none(), i.column != "In Progress"));
     {
-        heading(ui, &format!("O meu trabalho · {}", mine.len()), acc, Some(View::Now), go);
+        heading(ui, &format!("O meu trabalho · {}", mine.len()), acc, Some(View::Work), go);
         panel(ui, acc, |ui| {
             if mine.is_empty() {
                 ui.label(RichText::new("Não tens nada em curso nem planeado. Pega num item disponível ao lado.").color(theme::MUTED));
@@ -662,7 +662,7 @@ fn available(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Optio
     }
     let available: Vec<&Item> = d.refined.iter().take(6).collect();
     {
-        heading(ui, &format!("Disponível · {}", d.refined.len()), acc, Some(View::Refined), go);
+        heading(ui, &format!("Disponível · {}", d.refined.len()), acc, Some(View::Work), go);
         panel(ui, acc, |ui| {
             if available.is_empty() {
                 ui.label(RichText::new("Nada livre no Refined.").color(theme::MUTED));
@@ -683,7 +683,7 @@ fn available(ui: &mut Ui, d: &Dashboard, x: &Extras, acc: Accent, go: &mut Optio
                 });
             }
             if d.refined.len() > available.len() && button(ui, &format!("Ver os {} disponíveis", d.refined.len()), false, acc).clicked() {
-                *go = Some(View::Refined);
+                *go = Some(View::Work);
             }
             if !d.now.is_empty() && !d.refined.is_empty() {
                 ui.label(RichText::new("Ainda tens trabalho teu: o Refined fica para depois dele.").small().color(theme::FAINT));

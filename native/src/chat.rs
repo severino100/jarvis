@@ -793,6 +793,24 @@ Mensagem de {}:
         });
     }
 
+    /// Dev aid for JARVIS_SHOT_VIEW=chat-review: a PR review conversation that ends with a draft to approve.
+    pub fn seed_demo_review(&self) {
+        let id = self.create(Some("Review PR !3220 Exportação de fornecedores para Excel".into()), None, Some("demo:3220".into()));
+        self.edit(&id, true, |c| {
+            c.messages = vec![
+                msg("user", "Faz o review do PR !3220 (Equipa.Api, feature/3220 → main) com as regras de review do repositório."),
+                Msg {
+                    model: Some("claude".into()),
+                    ..msg("assistant", "Li o diff (4 ficheiros). O que está bem: a exportação está atrás do filtro de permissões e tem teste. O que preocupa: a query carrega todos os fornecedores em memória e o endpoint não valida o tamanho da página.
+
+[[REVIEW]]
+{\"pr\":\"demo:3220\",\"vote\":-5,\"summary\":\"Boa base, mas há dois pontos a resolver antes de aprovar.\",\"comments\":[{\"file\":\"/src/Suppliers/ExportService.cs\",\"line\":42,\"text\":\"Isto carrega todos os fornecedores em memória: usa paginação ou um stream para listas grandes.\"},{\"file\":\"/src/Suppliers/SuppliersController.cs\",\"line\":18,\"text\":\"Falta validar o tamanho máximo da página; sem isso um pedido pode pedir tudo de uma vez.\"},{\"text\":\"Falta um teste para a lista vazia.\"}]}
+[[/REVIEW]]")
+                },
+            ];
+        });
+    }
+
     fn apply(&self, id: &str, ev: Ev, engine: &str) {
         match &ev {
             Ev::Block(t) => {

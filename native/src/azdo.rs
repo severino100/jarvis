@@ -119,6 +119,8 @@ pub struct Dashboard {
     pub now: Vec<Item>,
     pub review: Vec<Item>,
     pub refined: Vec<Item>,
+    /// Items in the available column (Refined) already assigned to me.
+    pub mine_refined: Vec<Item>,
     pub tasks: Vec<Task>,
 }
 
@@ -140,6 +142,7 @@ fn request(method: &str, path: &str, body: Option<Value>) -> Res<Value> {
     let a = a.as_str();
     let result = match (method, body) {
         ("POST", Some(b)) => ureq::post(&url).header("Authorization", a).header("Accept", "application/json").send_json(b),
+        ("PUT", Some(b)) => ureq::put(&url).header("Authorization", a).header("Accept", "application/json").send_json(b),
         ("PATCH", Some(b)) => ureq::patch(&url)
             .header("Authorization", a)
             .header("Accept", "application/json")
@@ -416,6 +419,16 @@ fn refined_items(sprint: &Sprint) -> Res<Vec<Item>> {
     Ok(ids.iter().filter_map(|i| by_id.get(i).cloned()).collect())
 }
 
+/// Refined items already assigned to me (taken, not started).
+fn mine_refined_items(sprint: &Sprint) -> Res<Vec<Item>> {
+    let ids = wiql(
+        &format!("SELECT [System.Id] FROM WorkItems WHERE {} AND [System.BoardColumn]='{}' AND [System.AssignedTo]=@Me ORDER BY [Microsoft.VSTS.Common.BacklogPriority]", query_base(), cfg().available),
+        100,
+    )?;
+    let by_id: HashMap<i64, Item> = get_items(&ids, false)?.iter().map(|w| summarize(w, &sprint.path)).map(|i| (i.id, i)).collect();
+    Ok(ids.iter().filter_map(|i| by_id.get(i).cloned()).collect())
+}
+
 fn sprint_tasks(sprint: &Sprint) -> Res<Vec<Task>> {
     let ids = wiql(
         &format!(
@@ -439,14 +452,15 @@ pub fn dashboard() -> Res<Dashboard> {
     fn join<T>(h: thread::ScopedJoinHandle<'_, Res<T>>) -> Res<T> {
         h.join().unwrap_or_else(|_| Err("Falhou a leitura do Azure DevOps.".to_owned()))
     }
-    let (now, review, refined, tasks) = thread::scope(|s| {
+    let (now, review, refined, tasks, mine_refined) = thread::scope(|s| {
         let a = s.spawn(|| now_items(&sprint, &email));
         let b = s.spawn(|| review_items(&sprint));
         let c = s.spawn(|| refined_items(&sprint));
         let d = s.spawn(|| sprint_tasks(&sprint));
-        (join(a), join(b), join(c), join(d))
+        let e = s.spawn(|| mine_refined_items(&sprint));
+        (join(a), join(b), join(c), join(d), join(e))
     });
-    let (mut now, mut review, refined, mut tasks) = (now?, review?, refined?, tasks?);
+    let (mut now, mut review, refined, mut tasks, mine_refined) = (now?, review?, refined?, tasks?, mine_refined?);
 
     let mut kid_ids: Vec<i64> = now.iter().chain(review.iter()).flat_map(|i| i.child_ids.clone()).collect();
     kid_ids.sort_unstable();
@@ -469,7 +483,7 @@ pub fn dashboard() -> Res<Dashboard> {
     for t in tasks.iter_mut() {
         t.parent = t.parent_id.and_then(|p| parents.get(&p).cloned());
     }
-    Ok(Dashboard { me: who, sprint, now, review, refined, tasks })
+    Ok(Dashboard { me: who, sprint, now, review, refined, mine_refined, tasks })
 }
 
 
@@ -515,6 +529,11 @@ pub fn get_json(path: &str) -> Res<Value> {
     get(path)
 }
 
+/// POST / PUT with a JSON body, relative to the organization (PR comments and votes).
+pub fn send_json(method: &str, path: &str, body: Value) -> Res<Value> {
+    request(method, path, Some(body))
+}
+
 pub fn project_path(rest: &str) -> String {
     format!("{}/{rest}{}{V}", proj(), if rest.contains('?') { "&" } else { "?" })
 }
@@ -532,4 +551,44 @@ pub fn set_fields(id: i64, fields: &[(&str, Value)]) -> Res<()> {
 
 pub fn web_url(path: &str) -> String {
     format!("{}/{}/{path}", org(), proj())
+}
+
+/// Screenshots only (`JARVIS_SHOT_DEMO=1`): a made-up board, so the Tarefas page can be shown without a connection.
+pub fn demo() -> Option<Dashboard> {
+    std::env::var("JARVIS_SHOT_DEMO").ok()?;
+    let item = |id: i64, kind: &str, title: &str, column: &str, owner: Option<&str>, effort: Option<f64>, in_sprint: bool| Item {
+        id,
+        url: format!("https://dev.azure.com/demo/_workitems/edit/{id}"),
+        kind: kind.into(),
+        title: title.into(),
+        state: column.into(),
+        column: column.into(),
+        in_sprint,
+        effort,
+        priority: Some(2),
+        owner: owner.map(str::to_owned),
+        created_by: Some("Ana Silva".into()),
+        changed_at: "2026-11-20T10:00:00Z".into(),
+        ..Default::default()
+    };
+    let me = "Rita Demo";
+    let mut doing = item(9101, "Bug", "Localização continua disabled ao manter no fornecedor", "In Progress", Some(me), Some(3.0), true);
+    doing.tasks = vec![Task { id: 9201, title: "Corrigir o estado do campo".into(), state: "Active".into(), side: Some("FRONT".into()), estimate: Some(3.0), work_done: Some(1.0), activity: Some("Development".into()), ..Default::default() }];
+    let tasks = vec![
+        Task { parent_id: Some(9101), parent: Some(Parent { id: 9101, title: doing.title.clone(), column: "In Progress".into(), url: String::new() }), ..doing.tasks[0].clone() },
+        Task { id: 9202, title: "Testar no browser".into(), state: "Done".into(), side: Some("BACK".into()), estimate: Some(1.0), work_done: None, activity: None, parent_id: Some(9101), parent: Some(Parent { id: 9101, title: doing.title.clone(), column: "In Progress".into(), url: String::new() }), ..Default::default() },
+    ];
+    Some(Dashboard {
+        me: Me { email: "rita@demo.pt".into(), name: me.into() },
+        sprint: Sprint { path: "Demo Sprint 42".into(), name: "Sprint 42".into(), start: "2026-11-16T00:00:00Z".into(), finish: "2026-11-27T00:00:00Z".into() },
+        now: vec![
+            doing,
+            item(9102, "PBI", "Exportar a lista de fornecedores para Excel", "Planned", Some(me), Some(5.0), true),
+            item(9103, "Improvement", "Mostrar o NIF na ficha do cliente", "Planned", None, Some(2.0), true),
+        ],
+        review: vec![item(9090, "Bug", "Total do documento sem IVA arredondado", "Code Review", Some(me), Some(2.0), true)],
+        refined: vec![item(9110, "Bug", "Pesquisa ignora acentos nos artigos", "Refined", None, Some(3.0), false), item(9111, "PBI", "Filtro por estado nas encomendas", "Refined", None, None, false)],
+        mine_refined: vec![item(9105, "PBI", "Alertas de stock mínimo por armazém", "Refined", Some(me), Some(8.0), false)],
+        tasks,
+    })
 }

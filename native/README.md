@@ -5,11 +5,13 @@ Interface nativa em Rust com **egui/eframe 0.37** (motor OpenGL `glow`), sem web
 ```bash
 cargo run                     # debug (escreve na consola)
 cargo build --release         # target\release\jarvis.exe (~16 MB)
-JARVIS_SHOT_RS=<ficheiro.png> JARVIS_SHOT_VIEW=today|now|review|refined|hours|chat|agenda|tasks|prs|cleanup|settings target\release\jarvis.exe   # captura e sai
+JARVIS_SHOT_RS=<ficheiro.png> JARVIS_SHOT_VIEW=today|work|chat|agenda|tasks|prs|jarvis|cleanup|settings target\release\jarvis.exe   # captura e sai
 JARVIS_SHOT_DELAY=9 ...       # espera mais antes da captura (a agenda e os PRs demoram uns segundos)
 JARVIS_SHOT_VIEW=chat JARVIS_SHOT_WINDOW=1 ...   # vista Chat com uma conversa de exemplo, também numa janela à parte
 JARVIS_SHOT_VOICE=1 ...       # abre o painel da voz com uma troca de exemplo (sem microfone)
 JARVIS_SHOT_VIEW=chat-rh ...  # uma conversa de RH de exemplo (com "Guardei" e "Desfeito"), num ficheiro temporário
+JARVIS_SHOT_VIEW=chat-review ...  # uma conversa de review de PR de exemplo, com o rascunho por aprovar
+JARVIS_SHOT_DEMO=1 ...        # um board e PRs inventados (sem ligação ao Azure DevOps): para as capturas de work e prs; usa-o com JARVIS_DATA_DIR=<pasta>, porque as novidades inventadas criam conversas no perfil
 JARVIS_SHOT_VIEW=eu ...       # Definições → O meu Jarvis
 JARVIS_SHOT_MODES=rh ...      # finge estes modos (rh, dev ou dev,rh) sem mexer no perfil guardado
 JARVIS_SHOT_NO_LOGIN=1 ...    # mostra os motores instalados como sem sessão iniciada (com Iniciar sessão)
@@ -40,6 +42,7 @@ O `jarvis.exe` não precisa de nada ao lado: os guias genéricos (`docs/preparac
 | `state-native.json` | definições e o que já foi visto no board e nos PRs |
 | `chats-native.json` | conversas |
 | `tasks.json` | tarefas pessoais |
+| `reviews-publicadas.txt` | os rascunhos de review já publicados (para não se publicarem duas vezes) |
 | `notion-native.json` | páginas do Notion e o token cifrado com a DPAPI |
 | `recursos\` | guias e scripts que vêm dentro do executável |
 | `planos\` | os planos de preparação que o Antigravity passa ao `apply` da skill |
@@ -50,7 +53,7 @@ As regras da conversa estão em `../docs/persona*.md` (entram no executável com
 
 ## Modos
 
-`Profile.modes` diz para que a pessoa usa o Jarvis: `dev` (o board, os PRs, as horas e a limpeza) e/ou `rh` (o assistente pessoal de RH). Um perfil antigo sem o campo conta como `["dev"]`. Sem o modo dev, o menu não mostra Agora, PRs, Revisão, Refined, Horas nem Limpeza, a barra lateral não mostra o sprint e o Hoje não espera pelo board (`app::shown`, `dashboard::personal`). Os blocos do Hoje que cada pessoa desliga ficam em `Profile.today_hidden` (chaves de `dashboard::BLOCKS`) e os ecrãs que tira do menu em `Profile.menu_hidden` (chaves de `app::menu_entries`; Hoje e Definições ficam sempre).
+`Profile.modes` diz para que a pessoa usa o Jarvis: `dev` (o board, os PRs, as horas e a limpeza) e/ou `rh` (o assistente pessoal de RH). Um perfil antigo sem o campo conta como `["dev"]`. Sem o modo dev, o menu não mostra Tarefas (o board), PRs nem Limpeza, a barra lateral não mostra o sprint e o Hoje não espera pelo board (`app::shown`, `dashboard::personal`). Os blocos do Hoje que cada pessoa desliga ficam em `Profile.today_hidden` (chaves de `dashboard::BLOCKS`) e os ecrãs que tira do menu em `Profile.menu_hidden` (chaves de `app::menu_entries`; Hoje e Definições ficam sempre).
 
 Cada conversa tem um modo (`Chat.mode`): as de item e de PR são dev; as outras são rh quando o modo RH está ligado (`profile::default_mode`), e com os dois modos escolhe-se por cima da caixa de escrita (muda para uma sessão nova, porque as regras entram no início da sessão). No modo rh o motor arranca em `eu\`, pode ler a pasta da pessoa (`%USERPROFILE%`) em vez dos projetos, o Claude não tem `Bash`, e as regras da equipa vêm de `[guides] persona_rh` do pacote (ou de `persona`, para quem só tem o modo RH).
 
@@ -72,6 +75,17 @@ As instruções e a memória juntam-se a todas as conversas (dev, rh e geral) de
 **`[[SKILL: nome | quando usar]] … [[/SKILL]]`**: quando a pessoa pede um atalho ("a partir de agora, quando eu disser *triagem*, faz…"), a IA escreve as instruções neste bloco. O Jarvis grava-as em `eu\skills\<nome>\SKILL.md` (o comando `/eu:<nome>`; `eu::save_skill`), esconde o bloco e mostra "Criei o teu comando" com "Desfazer" (apaga o comando, ou volta à versão anterior se já existia). Os atalhos entram também em texto nas instruções, porque o Antigravity e o Codex não carregam skills do Claude Code.
 
 **Exemplos de estilo**: o cartão de um rascunho `[[EMAIL]]` tem "Editar". Quando uma versão editada sai (Abrir no Outlook ou Copiar), o corpo final vai para `exemplos.md` (`eu::add_example`) e as conversas seguintes recebem-no como exemplo de tom, comprimento e assinatura, com a indicação de nunca reutilizar os nomes nem os dados. Definições → O meu Jarvis mostra-os, com Apagar. Testes: `cargo test` (em `eu.rs`).
+
+## O menu
+
+- **Hoje**, **Tarefas**, **Pessoais**, **PRs**, **Chat** e **Limpeza**. Os nomes: "Tarefas" é o board (`View::Work`, `views::work`) e "Pessoais" é a lista pessoal e o Notion (`View::Tasks`, `tasks.rs`).
+- **Tarefas** é um painel: números em cima (clicar num abre só essa secção, clicar outra vez volta ao quadro) e por baixo um quadro de colunas com cartões compactos; junta, em secções,, o que antes eram Agora, Revisão e QA, Refined livre e Horas do sprint: *Atribuídas a mim em Refined* (`azdo::mine_refined_items`), *A fazer agora* (In Progress e os devolvidos pelo QA, mais as planeadas para mim), *Livres para pegar* (Planned sem dono neste sprint e Refined sem dono, mesmo fora do sprint), *Revisão e QA* e *Horas do sprint*. Os nomes antigos de `JARVIS_SHOT_VIEW` (`now`, `review`, `refined`, `hours`) abrem esta página.
+- **Agenda** já não é entrada do menu: é o botão pequeno "Agenda" antes de "Atualizar", no fundo do menu.
+- **Falar com o Jarvis** (o botão grande por baixo do sprint) abre a conversa livre (modo `geral`); lá dentro, o botão **Falar** liga a voz (Whisper e Piper, `voice.rs`) nessa conversa, e tudo o que se diz vai para a IA, sobre qualquer assunto (`Voice::talk_in`: sem os atalhos do board). Ctrl+Alt+J e o menu da bandeja continuam a falar logo.
+
+## Review de PRs
+
+A vista PRs tem duas secções: *Para rever* (PRs de outras pessoas onde sou revisor, `searchCriteria.reviewerId`) e *Os meus* (com "Corrigir"). "Rever com o Jarvis" abre uma conversa (como "Corrigir") cujo pedido (`prs::review_prompt`) leva o PR, os comentários que já lá estão e as regras de review da equipa: o campo opcional `[guides] review` do `jarvis.toml` do pacote ativo (`profile::Guide::Review`; aceita as mesmas variáveis que os outros guias; sem ele, a IA usa o CLAUDE.md do repositório). A IA lê o diff em só leitura (`git fetch` e `git diff`), explica o que viu e termina com um bloco `[[REVIEW]]` (JSON: `vote`, `summary`, `comments` com `file` e `line` opcionais). O Jarvis mostra-o como um cartão "Rascunho de review" onde se muda o voto, o resumo e cada comentário (ou se desmarca) e **só "Publicar no PR" escreve no Azure DevOps**: um thread por comentário (na linha do ficheiro quando há), o resumo como thread geral e o voto (`PUT …/reviewers/<eu>`). Precisa de um token com Code (Read & Write). Um rascunho publicado fica registado em `reviews-publicadas.txt` e nunca volta a ser publicado. Testes: `cargo test prs`.
 
 ## Primeiro arranque
 
@@ -111,6 +125,53 @@ target\debug\jarvis.exe --update-test                        # lê o último rel
 
 ## Perfil e pacotes de equipa
 
+Podem estar **vários pacotes ligados ao mesmo tempo** (Definições → Perfil e equipa: uma caixa por pacote; `Profile.active_packs`, na ordem em que foram ligados; o `active_pack` de um perfil antigo migra sozinho para a lista). Como se juntam (`profile.rs`):
+
+- **Skills**: o Claude arranca com um `--plugin-dir` por pacote ligado que seja um plugin (`plugin_dirs`).
+- **Guias** (`persona`, `persona_rh`, `agy`, `prepare`, `test`, `review`): juntam-se os de todos os pacotes ligados, pela ordem, separados por `---` (`read_guide`). Se dois pacotes dizem coisas contrárias, vale o que vem primeiro na lista porque está primeiro no texto; não há resolução automática. Os que são um caminho único (guia de preparação a que a IA é apontada) usam o do primeiro pacote que o tem.
+- **Board** (o do ecrã Tarefas, PRs, horas e limpeza): o do primeiro pacote ligado com `[board]` válido; os nomes das colunas (`working`, `available`…) vêm desse `[board]`. A skill do board (comando `/skill` e `skill_cli`) é a desse mesmo pacote, ou, se ele não tiver, a do primeiro pacote ligado que tenha.
+- **Repositórios, branches e worktrees**: do primeiro pacote ligado com `[[repo]]` (senão o primeiro ligado).
+- **Separadores próprios** (`[[tab]]`, `pack_tab.rs`): um pacote pode acrescentar entradas ao menu, depois de Limpeza (uma por `[[tab]]`, pela ordem dos pacotes ligados). Cada uma tem `title`, `about` e `[[tab.action]]`; uma ação é um pedido à IA (`prompt`: abre uma conversa que usa as skills e as regras dos pacotes ligados) ou algo para abrir (`open`: link ou ficheiro). `input` é o rótulo de uma caixa de texto cujo valor entra em `{input}`; `default` é o valor inicial; `{sprint}` é o número do sprint atual (do board). Exemplo:
+
+```toml
+[[tab]]
+title = "Painel"
+about = "As métricas da equipa."
+
+[[tab.action]]
+label = "Resumo do sprint"
+hint = "Pede ao Jarvis o resumo do sprint indicado."
+prompt = "resume-me o sprint {input}"
+input = "Sprint"
+default = "{sprint}"
+
+[[tab.action]]
+label = "Painel em tempo real"
+open = "http://localhost:8080"
+```
+
+**KPIs** (`[tab.kpis]`, `pack_kpi.rs`): o separador mostra cartões (valor, variação desde a leitura anterior, linha de tendência, detalhe, agrupados) lidos de um comando do pacote que escreve JSON. O Jarvis corre-o na pasta do pacote, com o mesmo ambiente das skills (`AZDO_*` e o token), fora da interface, e o pacote diz onde está cada coisa com caminhos separados por pontos: `run` (o comando; a primeira palavra é o programa, relativo ao pacote), `items` (a lista), `label`, `value`, `detail`, `unit`, `better` (`up` ou `down`: colore a variação), `trend` (lista de pares [rótulo, número]), `group`, `error`, e no topo `title`, `updated` e `refresh_minutes` (0: só com o botão Atualizar). Exemplo para uma ferramenta que escreve JSON com `painel.exe report --json`:
+
+```toml
+[tab.kpis]
+run = "tools/painel/painel.exe report --json"
+items = "kpis"
+label = "metric.label"
+value = "value.v"
+detail = "value.detail"
+unit = "metric.unit"
+better = "metric.better"
+trend = "trend"
+group = "metric.group"
+error = "error"
+title = "label"
+updated = "read_at"
+refresh_minutes = 10
+```
+
+Captura: `JARVIS_SHOT_VIEW=pack0` (o primeiro separador de pacote).
+- **Ambiente** das skills (`child_env`): `AZDO_ORG`, `AZDO_PROJECT` e `AZDO_AREA` são os do board do ecrã Tarefas; cada pacote ligado com board tem ainda `AZDO_ORG__<PACOTE>`, `AZDO_PROJECT__<PACOTE>` e `AZDO_AREA__<PACOTE>` (`<PACOTE>` é o nome da pasta do pacote em maiúsculas, com `_` no lugar do que não é letra ou número), e `JARVIS_PACKS` lista as pastas ligadas separadas por `;`. O token é um só (o da pessoa).
+
 Nada de uma empresa está no código do Jarvis. Há três camadas:
 
 | Camada | Onde | O quê |
@@ -146,6 +207,7 @@ worktree = "{repo}-{id}"
 
 [guides]                          # opcionais, caminhos dentro do pacote
 persona = "guias/persona.md"
+review = "guias/review.md"        # regras de review de PRs (Rever com o Jarvis)
 prepare = "guias/preparacao.md"
 test = "guias/testar-no-browser.md"
 

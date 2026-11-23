@@ -3,6 +3,8 @@
 
 mod agenda;
 mod ics;
+mod pack_kpi;
+mod pack_tab;
 mod app;
 mod azdo;
 mod cleanup;
@@ -61,14 +63,14 @@ fn main() -> eframe::Result {
         println!("nome {} ({}) | projetos {} | principal {}", p.name, p.spoken_name, p.projects_dir, profile::main_dir().display());
         println!("modos {:?} | dev {} | rh {} | primeiro arranque feito {}", profile::modes(), profile::dev(), profile::has_mode(profile::RH), p.welcomed);
         match profile::pack() {
-            Some(pk) => println!("pacote {} em {} | board {} | skill {:?} | cli {:?} | plugin {:?}", pk.m.name, pk.dir.display(), profile::board().is_some(), profile::skill_command(), profile::skill_cli(), profile::plugin_dir()),
+            Some(pk) => println!("pacotes ativos {:?} | primeiro {} em {} | board {} | skill {:?} | cli {:?} | plugins {:?}", profile::active_dirs(), pk.m.name, pk.dir.display(), profile::board().is_some(), profile::skill_command(), profile::skill_cli(), profile::plugin_dirs()),
             None => println!("sem pacote"),
         }
         println!("ramo Bug {:?} | outro {:?} | token {}", profile::branch_for("Bug", "Sprint 33", 8780), profile::branch_for("PBI", "Sprint 33", 8780), profile::board_token().is_some());
         for r in profile::repos() {
             println!("repo {} {} -> worktree {}", r.side, profile::repo_dir(&r).display(), profile::worktree_dir(&r, 8780).display());
         }
-        for g in [profile::Guide::Persona, profile::Guide::PersonaRh, profile::Guide::Agy, profile::Guide::Prepare, profile::Guide::Test] {
+        for g in [profile::Guide::Persona, profile::Guide::PersonaRh, profile::Guide::Agy, profile::Guide::Prepare, profile::Guide::Test, profile::Guide::Review] {
             println!("guia {:?}", profile::guide(g));
         }
         let prep = brain::Prep { id: 8780, branch: profile::branch_for("Bug", "Sprint 1", 8780).unwrap_or_default() };

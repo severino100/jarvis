@@ -326,8 +326,12 @@ pub fn ask_claude(text: &str, turn: &Turn, model: &str, session: Option<&str>, s
     // analysis uses, and no user-level settings (plugins, hooks); the team's skills come from the pack, which is a
     // Claude Code plugin.
     cmd.args(["--strict-mcp-config", "--tools", if is_rh(turn.mode) { LEAN_TOOLS_RH } else { LEAN_TOOLS }, "--settings", r#"{"effortLevel":"medium"}"#]);
-    if let Some(plugin) = crate::profile::plugin_dir() {
-        cmd.args(["--setting-sources", "project,local", "--plugin-dir"]).arg(plugin);
+    let plugins = crate::profile::plugin_dirs();
+    if !plugins.is_empty() {
+        cmd.args(["--setting-sources", "project,local"]);
+        for plugin in plugins {
+            cmd.arg("--plugin-dir").arg(plugin);
+        }
     }
     // The personal skills (%APPDATA%\Jarvis\eu\skills), a plugin of their own.
     cmd.arg("--plugin-dir").arg(crate::eu::plugin_dir());
@@ -969,6 +973,10 @@ pub fn read_skills(text: &str) -> Vec<NewSkill> {
 pub fn hide_partial(text: &str) -> String {
     let mut t = strip_marks(text);
     if let Some(i) = t.find("[[SKILL:") {
+        t.truncate(i);
+    }
+    // A review draft still arriving (its JSON is for the card, not for reading).
+    if let Some(i) = t.find("[[REVIEW]]").filter(|i| !t[*i..].contains("[[/REVIEW]]")) {
         t.truncate(i);
     }
     if let Some(i) = t.rfind("[[").filter(|i| !t[*i..].contains("]]")) {

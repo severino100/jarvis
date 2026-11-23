@@ -23,8 +23,12 @@ pub struct Profile {
     pub projects_dir: String,
     /// Installed pack folders.
     pub packs: Vec<String>,
-    /// The pack whose board, repositories and skills Jarvis uses.
+    /// Legacy single active pack; read once and moved to `active_packs` (see `store`).
+    #[serde(skip_serializing_if = "String::is_empty")]
     pub active_pack: String,
+    /// The packs that are on, in order (skills, guides, board, repositories come from these). None: an older profile
+    /// that still has `active_pack`, or no choice yet (the first installed pack counts as on).
+    pub active_packs: Option<Vec<String>>,
     /// The board's personal access token, DPAPI-encrypted, base64.
     pub board_token: String,
     /// What this person uses Jarvis for: "dev" (board, PRs, hours, cleanup) and/or "rh" (the personal HR assistant).
@@ -87,6 +91,7 @@ impl Default for Profile {
             projects_dir: String::new(),
             packs: Vec::new(),
             active_pack: String::new(),
+            active_packs: None,
             board_token: String::new(),
             modes: vec![DEV.into()],
             today_hidden: Vec::new(),
@@ -137,10 +142,68 @@ pub struct Manifest {
     pub repos: Vec<RepoCfg>,
     pub branches: Branches,
     pub guides: Guides,
+    /// Tabs this pack adds to the menu (`[[tab]]`, with `[[tab.action]]` inside).
+    #[serde(rename = "tab")]
+    pub tabs: Vec<TabCfg>,
     /// The board skill's folder in the pack, e.g. "skills/board"; its name is the slash command.
     pub skill: String,
     /// The board script Antigravity may run for an item's preparation (show / apply), relative to the pack.
     pub skill_cli: String,
+}
+
+/// A menu tab from a pack: a title, a line about it and its actions.
+#[derive(Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TabCfg {
+    pub title: String,
+    pub about: String,
+    /// KPI cards read from a command of the pack (`[tab.kpis]`).
+    pub kpis: Option<KpiCfg>,
+    #[serde(rename = "action")]
+    pub actions: Vec<TabAction>,
+    /// The pack's folder name (filled by `pack_tabs`).
+    #[serde(skip)]
+    pub pack: String,
+}
+
+/// Where a tab's KPI cards come from: a command of the pack that prints JSON, and where in that JSON each part is
+/// (dotted paths, e.g. `value.v`). Only `run` and `items` are required.
+#[derive(Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct KpiCfg {
+    /// The command, relative to the pack (the first word is the program, e.g. `tools/painel/painel.exe report --json`).
+    pub run: String,
+    /// Path of the list of KPIs in the output.
+    pub items: String,
+    pub label: String,
+    pub value: String,
+    pub detail: String,
+    pub unit: String,
+    /// `up` or `down`: which way is better (colours the change); empty: neutral.
+    pub better: String,
+    /// Path of a list of [label, number] pairs.
+    pub trend: String,
+    pub group: String,
+    /// Path of an error text; the card shows it instead of the value.
+    pub error: String,
+    /// Optional top-level texts: a line above the cards and when it was read.
+    pub title: String,
+    pub updated: String,
+    /// Minutes before the numbers are read again on their own (0: only with the button).
+    pub refresh_minutes: u64,
+}
+
+/// One thing a pack tab can do: ask the AI (`prompt`) or open a link or file (`open`). `{input}` is what the person types in
+/// the text box (`input` is its label; `default` its first value) and `{sprint}` the current sprint's number.
+#[derive(Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TabAction {
+    pub label: String,
+    pub hint: String,
+    pub prompt: String,
+    pub open: String,
+    pub input: String,
+    pub default: String,
 }
 
 #[derive(Clone, Deserialize)]
@@ -225,6 +288,8 @@ pub struct Guides {
     pub prepare: String,
     /// How to test in the browser; copied into every hand-off.
     pub test: String,
+    /// The team's rules for reviewing a pull request; given to the AI in the PRs → Rever conversation.
+    pub review: String,
 }
 
 #[derive(Clone)]
@@ -246,6 +311,8 @@ fn store() -> &'static Mutex<Profile> {
             // No profile yet: the first run guides this person through it (welcome.rs).
             Profile { name: std::env::var("USERNAME").unwrap_or_default(), projects_dir: projects.to_string_lossy().into_owned(), welcomed: false, ..Default::default() }
         });
+        let mut p = p;
+        migrate(&mut p);
         Mutex::new(p)
     })
 }
@@ -282,11 +349,88 @@ pub fn read_pack(dir: &Path) -> Result<Pack, String> {
     Ok(Pack { dir: dir.to_owned(), m })
 }
 
-/// The active pack, or the first installed one.
-pub fn pack() -> Option<Pack> {
+/// An older profile (one `active_pack`, or none chosen) becomes an explicit list of packs that are on.
+fn migrate(p: &mut Profile) {
+    if p.active_packs.is_none() {
+        let first = if p.active_pack.is_empty() { p.packs.first().cloned() } else { Some(p.active_pack.clone()) };
+        p.active_packs = Some(first.into_iter().collect());
+    }
+    p.active_pack.clear();
+}
+
+/// The folders of the packs that are on, in order (only the installed ones).
+pub fn active_dirs() -> Vec<String> {
     let p = get();
-    let dir = if p.active_pack.is_empty() { p.packs.first().cloned()? } else { p.active_pack };
-    read_pack(Path::new(&dir)).ok()
+    p.active_packs.unwrap_or_default().into_iter().filter(|d| p.packs.contains(d)).collect()
+}
+
+pub fn is_active(dir: &str) -> bool {
+    active_dirs().iter().any(|d| d == dir)
+}
+
+/// Turns a pack on or off (a new one goes to the end of the order).
+pub fn set_active(dir: &str, on: bool) {
+    update(|x| {
+        let list = x.active_packs.get_or_insert_with(Vec::new);
+        list.retain(|d| d != dir);
+        if on {
+            list.push(dir.to_owned());
+        }
+    });
+}
+
+/// Every pack that is on and readable, in order.
+pub fn packs_active() -> Vec<Pack> {
+    active_dirs().iter().filter_map(|d| read_pack(Path::new(d)).ok()).collect()
+}
+
+/// The tabs of every pack that is on, in order.
+pub fn pack_tabs() -> Vec<TabCfg> {
+    // Read from disk at most every 3 seconds: the menu asks every frame.
+    static CACHE: Mutex<Option<(std::time::Instant, Vec<TabCfg>)>> = Mutex::new(None);
+    let mut c = CACHE.lock().unwrap();
+    if let Some((at, tabs)) = c.as_ref() {
+        if at.elapsed().as_secs() < 3 {
+            return tabs.clone();
+        }
+    }
+    let tabs = read_pack_tabs();
+    *c = Some((std::time::Instant::now(), tabs.clone()));
+    tabs
+}
+
+fn read_pack_tabs() -> Vec<TabCfg> {
+    packs_active()
+        .into_iter()
+        .flat_map(|p| {
+            let name = p.dir.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            p.m.tabs.into_iter().filter(|t| !t.title.trim().is_empty()).map(move |mut t| {
+                t.pack = name.clone();
+                t
+            })
+        })
+        .collect()
+}
+
+/// The first pack that is on (what a single-pack question, like the name in `--profile`, asks).
+pub fn pack() -> Option<Pack> {
+    packs_active().into_iter().next()
+}
+
+/// The pack that has the repositories: the first active one with `[[repo]]`, else the first active one.
+fn code_pack() -> Option<Pack> {
+    let all = packs_active();
+    let i = all.iter().position(|p| !p.m.repos.is_empty()).unwrap_or(0);
+    all.into_iter().nth(i)
+}
+
+/// The pack of the board shown in Tarefas: the first active one with a usable `[board]`.
+fn board_pack() -> Option<Pack> {
+    packs_active().into_iter().find(|p| p.m.board.as_ref().is_some_and(valid_board))
+}
+
+fn valid_board(b: &BoardCfg) -> bool {
+    b.kind == "azure-devops" && !b.org.is_empty() && !b.project.is_empty()
 }
 
 pub fn projects_dir() -> PathBuf {
@@ -294,8 +438,9 @@ pub fn projects_dir() -> PathBuf {
 }
 
 pub fn repos() -> Vec<RepoCfg> {
-    pack().map(|p| p.m.repos).unwrap_or_default()
+    code_pack().map(|p| p.m.repos).unwrap_or_default()
 }
+
 
 pub fn repo_dir(r: &RepoCfg) -> PathBuf {
     projects_dir().join(&r.dir)
@@ -308,7 +453,7 @@ pub fn main_dir() -> PathBuf {
 }
 
 pub fn branches() -> Branches {
-    pack().map(|p| p.m.branches).unwrap_or_default()
+    code_pack().map(|p| p.m.branches).unwrap_or_default()
 }
 
 pub fn worktree_dir(r: &RepoCfg, id: i64) -> PathBuf {
@@ -327,29 +472,37 @@ pub fn branch_for(kind: &str, sprint: &str, id: i64) -> Option<String> {
 }
 
 pub fn board() -> Option<BoardCfg> {
-    pack().and_then(|p| p.m.board).filter(|b| b.kind == "azure-devops" && !b.org.is_empty() && !b.project.is_empty())
+    board_pack().and_then(|p| p.m.board)
+}
+
+fn has_skill(p: &Pack) -> bool {
+    !p.m.skill.is_empty() && rel(&p.dir, &p.m.skill).join("SKILL.md").exists()
+}
+
+/// The pack of "the" board skill (the /command and the script Antigravity runs): the board's pack when it has one,
+/// else the first active pack that does.
+fn skill_pack() -> Option<Pack> {
+    board_pack().filter(has_skill).or_else(|| packs_active().into_iter().find(has_skill))
 }
 
 pub fn skill_dir() -> Option<PathBuf> {
-    let p = pack()?;
-    let d = rel(&p.dir, &p.m.skill);
-    (!p.m.skill.is_empty() && d.join("SKILL.md").exists()).then_some(d)
+    skill_pack().map(|p| rel(&p.dir, &p.m.skill))
 }
 
-/// The board skill's slash command ("/board"), when the pack has one.
+/// The board skill's slash command ("/board"), when a pack has one.
 pub fn skill_command() -> Option<String> {
     skill_dir().and_then(|d| d.file_name().map(|n| format!("/{}", n.to_string_lossy())))
 }
 
 pub fn skill_cli() -> Option<PathBuf> {
-    let p = pack()?;
+    let p = skill_pack()?;
     let f = rel(&p.dir, &p.m.skill_cli);
     (!p.m.skill_cli.is_empty() && f.is_file()).then_some(f)
 }
 
-/// The pack folder when it is a Claude Code plugin (.claude-plugin/plugin.json): its skills load with --plugin-dir.
-pub fn plugin_dir() -> Option<PathBuf> {
-    pack().map(|p| p.dir).filter(|d| d.join(".claude-plugin").join("plugin.json").exists())
+/// Every active pack that is a Claude Code plugin (.claude-plugin/plugin.json): Claude starts with one --plugin-dir each.
+pub fn plugin_dirs() -> Vec<PathBuf> {
+    packs_active().into_iter().map(|p| p.dir).filter(|d| d.join(".claude-plugin").join("plugin.json").exists()).collect()
 }
 
 pub enum Guide {
@@ -358,30 +511,44 @@ pub enum Guide {
     Agy,
     Prepare,
     Test,
+    Review,
 }
 
-/// A guide from the pack, or Jarvis's generic one.
-pub fn guide(g: Guide) -> Option<PathBuf> {
-    let from_pack = pack().and_then(|p| {
-        let rel = match g {
-            Guide::Persona => p.m.guides.persona,
-            // A dev pack's rules (branches, repositories) do not belong in an HR conversation.
-            Guide::PersonaRh if p.m.guides.persona_rh.is_empty() && !dev() => p.m.guides.persona,
-            Guide::PersonaRh => p.m.guides.persona_rh,
-            Guide::Agy => p.m.guides.agy,
-            Guide::Prepare => p.m.guides.prepare,
-            Guide::Test => p.m.guides.test,
-        };
-        let f = self::rel(&p.dir, &rel);
-        f.is_file().then_some(f)
-    });
+/// The guide of every active pack that has one, in the packs' order; Jarvis's generic one when none does.
+pub fn guides(g: Guide) -> Vec<PathBuf> {
+    let from_packs: Vec<PathBuf> = packs_active()
+        .into_iter()
+        .filter_map(|p| {
+            let rel = match g {
+                Guide::Persona => p.m.guides.persona,
+                // A dev pack's rules (branches, repositories) do not belong in an HR conversation.
+                Guide::PersonaRh if p.m.guides.persona_rh.is_empty() && !dev() => p.m.guides.persona,
+                Guide::PersonaRh => p.m.guides.persona_rh,
+                Guide::Agy => p.m.guides.agy,
+                Guide::Prepare => p.m.guides.prepare,
+                Guide::Test => p.m.guides.test,
+                Guide::Review => p.m.guides.review,
+            };
+            let f = self::rel(&p.dir, &rel);
+            f.is_file().then_some(f)
+        })
+        .collect();
+    if !from_packs.is_empty() {
+        return from_packs;
+    }
     let generic = match g {
         Guide::Prepare => Some("preparacao.md"),
         Guide::Test => Some("testar-no-browser.md"),
         _ => None,
     };
-    from_pack.or_else(|| generic.map(|n| crate::settings::resources_dir().join(n)).filter(|f| f.is_file()))
+    generic.map(|n| crate::settings::resources_dir().join(n)).filter(|f| f.is_file()).into_iter().collect()
 }
+
+/// The first guide (for the ones that are a single path, like the preparation guide the AI is pointed at).
+pub fn guide(g: Guide) -> Option<PathBuf> {
+    guides(g).into_iter().next()
+}
+
 
 /// Fills {nome}, {projetos}, {principal}, {repos}, {base}, {ramo_bug}, {ramo}, {worktree}, {fluxo} and
 /// {guia_preparacao} in a persona or guide.
@@ -411,7 +578,7 @@ pub fn render(text: &str) -> String {
 }
 
 pub fn read_guide(g: Guide) -> String {
-    guide(g).and_then(|f| fs::read_to_string(f).ok()).map(|t| render(t.trim())).unwrap_or_default()
+    guides(g).iter().filter_map(|f| fs::read_to_string(f).ok()).map(|t| render(t.trim())).filter(|t| !t.is_empty()).collect::<Vec<_>>().join("\n\n---\n\n")
 }
 
 /* ---------- the board token ---------- */
@@ -450,6 +617,15 @@ pub fn child_env(cmd: &mut Command) {
     if let Some(t) = board_token() {
         cmd.env("AZDO_PAT", t);
     }
+    // Every active pack with a board also gets its own variables (AZDO_ORG__<PACK> …, <PACK> being the pack's folder
+    // name in capitals), so a skill of any pack reads the board it belongs to even when another pack's board is the
+    // one in Tarefas. The token is the person's own, the same for all.
+    for p in packs_active() {
+        let Some(b) = p.m.board.as_ref().filter(|b| valid_board(b)) else { continue };
+        let slug: String = p.dir.file_name().map(|n| n.to_string_lossy().to_uppercase()).unwrap_or_default().chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '_' }).collect();
+        cmd.env(format!("AZDO_ORG__{slug}"), &b.org).env(format!("AZDO_PROJECT__{slug}"), &b.project).env(format!("AZDO_AREA__{slug}"), &b.area);
+    }
+    cmd.env("JARVIS_PACKS", active_dirs().join(";"));
     cmd.env("JARVIS_PROJECTS", projects_dir());
 }
 
@@ -472,8 +648,10 @@ pub fn add_folder(dir: &Path) -> Result<String, String> {
         if !x.packs.iter().any(|y| y.eq_ignore_ascii_case(&d)) {
             x.packs.push(d.clone());
         }
-        if x.active_pack.is_empty() {
-            x.active_pack = d.clone();
+        // A pack that is added is on.
+        let list = x.active_packs.get_or_insert_with(Vec::new);
+        if !list.contains(&d) {
+            list.push(d.clone());
         }
     });
     Ok(if p.m.name.is_empty() { "Pacote adicionado.".into() } else { format!("Pacote \"{}\" adicionado.", p.m.name) })
@@ -497,8 +675,8 @@ pub fn add_from_git(url: &str) -> Result<String, String> {
 pub fn remove(dir: &str) {
     update(|x| {
         x.packs.retain(|y| y != dir);
-        if x.active_pack == dir {
-            x.active_pack = x.packs.first().cloned().unwrap_or_default();
+        if let Some(l) = x.active_packs.as_mut() {
+            l.retain(|y| y != dir);
         }
     });
 }
@@ -520,4 +698,25 @@ pub fn update_packs() -> Vec<String> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn old_single_active_pack_becomes_a_list() {
+        let mut p = Profile { packs: vec!["a".into(), "b".into()], active_pack: "b".into(), ..Default::default() };
+        migrate(&mut p);
+        assert_eq!(p.active_packs, Some(vec!["b".to_owned()]));
+        assert!(p.active_pack.is_empty());
+        // No choice yet: the first installed pack is on.
+        let mut q = Profile { packs: vec!["a".into(), "b".into()], ..Default::default() };
+        migrate(&mut q);
+        assert_eq!(q.active_packs, Some(vec!["a".to_owned()]));
+        // An explicit list (even an empty one: all off) is left alone.
+        let mut r = Profile { packs: vec!["a".into()], active_packs: Some(vec![]), ..Default::default() };
+        migrate(&mut r);
+        assert_eq!(r.active_packs, Some(vec![]));
+    }
 }
