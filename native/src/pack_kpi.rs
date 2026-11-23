@@ -169,7 +169,7 @@ pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut Kpis, acc: Accent) {
             ui_kit::section_label(ui, g, acc.main, acc);
         }
         let cards: Vec<&Kpi> = s.items.iter().filter(|k| k.group == g).collect();
-        let per_row = ((ui.available_width() / 300.0).floor() as usize).clamp(1, 5);
+        let per_row = ((ui.available_width() / 300.0).floor() as usize).clamp(1, 8);
         for row in cards.chunks(per_row) {
             ui.columns(per_row, |cols| {
                 for (col, k) in cols.iter_mut().zip(row) {

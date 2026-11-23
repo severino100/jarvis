@@ -716,10 +716,7 @@ impl JarvisApp {
         let mut go = None;
         let mut pack_do = None;
         ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            // Cap at 1600 like the CSS max-width; set_max_width alone would also widen a narrower window. Hoje takes the
-            // whole width: on a big screen its columns spread out.
-            let cap = if self.view == View::Today { f32::INFINITY } else { 1600.0 };
-            ui.set_max_width(ui.available_width().min(cap));
+            // Every page takes the whole width of the window: on a big screen the columns spread out and on a small one they stack.
             match self.view {
                 View::Agenda => return agenda::view(ui, &self.agenda, &mut self.agenda_ui, acc),
                 View::Tasks => return tasks::view(ui, &mut self.tasks_ui, acc),
