@@ -32,7 +32,14 @@ fn notices() -> &'static Mutex<Vec<Notice>> {
     N.get_or_init(Default::default)
 }
 
+/// A notification: kept in the list and shown (toast and notice in the window).
 pub fn notify(title: &str, body: &str, click: AppEvent) {
+    record(title, body, &target_of(&click));
+    alert(title, body, click);
+}
+
+/// Only the toast and the notice in the window, not kept in the list (a chat reply that finished).
+pub fn alert(title: &str, body: &str, click: AppEvent) {
     if !crate::settings::load().notify {
         return;
     }
@@ -135,4 +142,102 @@ pub fn draw(ctx: &egui::Context, acc: Accent) {
     }
     ctx.request_repaint();
     let _ = Sense::hover();
+}
+
+/* ---------- the list: every notification kept, for the notifications window ---------- */
+
+/// One notification kept in the list. `target` says where a click goes: "show", "go:work", "go:prs", "go:settings" or "chat:<id>".
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct Entry {
+    pub id: u64,
+    /// Unix seconds.
+    pub at: i64,
+    pub title: String,
+    pub body: String,
+    pub target: String,
+    pub read: bool,
+}
+
+const KEEP: usize = 200;
+
+fn file() -> std::path::PathBuf {
+    crate::settings::data_dir().join("notificacoes.json")
+}
+
+fn list() -> &'static Mutex<Vec<Entry>> {
+    static L: OnceLock<Mutex<Vec<Entry>>> = OnceLock::new();
+    L.get_or_init(|| Mutex::new(std::fs::read_to_string(file()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()))
+}
+
+fn save(l: &[Entry]) {
+    let _ = std::fs::create_dir_all(crate::settings::data_dir());
+    let _ = std::fs::write(file(), serde_json::to_string(l).unwrap_or_default());
+}
+
+/// Where a click on this event goes, as the text kept in the list.
+pub fn target_of(ev: &AppEvent) -> String {
+    match ev {
+        AppEvent::OpenChat(id) => format!("chat:{id}"),
+        AppEvent::Go(crate::app::View::Work) => "go:work".into(),
+        AppEvent::Go(crate::app::View::Prs) => "go:prs".into(),
+        AppEvent::Go(crate::app::View::Settings) => "go:settings".into(),
+        _ => "show".into(),
+    }
+}
+
+pub fn event_of(target: &str) -> AppEvent {
+    match target {
+        "go:work" => AppEvent::Go(crate::app::View::Work),
+        "go:prs" => AppEvent::Go(crate::app::View::Prs),
+        "go:settings" => AppEvent::Go(crate::app::View::Settings),
+        t if t.starts_with("chat:") => AppEvent::OpenChat(t[5..].to_owned()),
+        _ => AppEvent::Show,
+    }
+}
+
+/// Adds a notification to the list (no toast; see `alert`).
+pub fn record(title: &str, body: &str, target: &str) {
+    let now = chrono::Utc::now();
+    {
+        let mut l = list().lock().unwrap();
+        let id = now.timestamp_millis() as u64 + l.len() as u64;
+        l.push(Entry { id, at: now.timestamp(), title: title.to_owned(), body: body.to_owned(), target: target.to_owned(), read: false });
+        let n = l.len();
+        if n > KEEP {
+            l.drain(..n - KEEP);
+        }
+        save(&l);
+    }
+    post(AppEvent::Repaint);
+}
+
+/// The list, newest first.
+pub fn entries() -> Vec<Entry> {
+    let mut v: Vec<Entry> = list().lock().unwrap().iter().cloned().collect();
+    v.sort_by(|a, b| b.at.cmp(&a.at).then(b.id.cmp(&a.id)));
+    v
+}
+
+pub fn unread() -> usize {
+    list().lock().unwrap().iter().filter(|e| !e.read).count()
+}
+
+pub fn mark_read(id: u64) {
+    let mut l = list().lock().unwrap();
+    if let Some(e) = l.iter_mut().find(|e| e.id == id) {
+        e.read = true;
+    }
+    save(&l);
+}
+
+pub fn mark_all_read() {
+    let mut l = list().lock().unwrap();
+    l.iter_mut().for_each(|e| e.read = true);
+    save(&l);
+}
+
+pub fn clear() {
+    let mut l = list().lock().unwrap();
+    l.clear();
+    save(&l);
 }

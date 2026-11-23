@@ -159,6 +159,8 @@ pub struct TabCfg {
     pub about: String,
     /// KPI cards read from a command of the pack (`[tab.kpis]`).
     pub kpis: Option<KpiCfg>,
+    /// A table read from a command of the pack (`[tab.table]`).
+    pub table: Option<TableCfg>,
     #[serde(rename = "action")]
     pub actions: Vec<TabAction>,
     /// The pack's folder name (filled by `pack_tabs`).
@@ -719,4 +721,28 @@ mod tests {
         migrate(&mut r);
         assert_eq!(r.active_packs, Some(vec![]));
     }
+}
+
+/// Where a tab's table comes from: a command of the pack that prints JSON, the list of rows in it, and the columns (each one a
+/// title and a dotted path into a row). Columns with `sum = true` are added up in a last row; `align` is "left" or "right"
+/// (numbers: right).
+#[derive(Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct TableCfg {
+    pub run: String,
+    pub items: String,
+    /// Heading above the table.
+    pub title: String,
+    pub refresh_minutes: u64,
+    #[serde(rename = "column")]
+    pub columns: Vec<ColCfg>,
+}
+
+#[derive(Clone, Deserialize, Default)]
+#[serde(default)]
+pub struct ColCfg {
+    pub title: String,
+    pub path: String,
+    pub align: String,
+    pub sum: bool,
 }

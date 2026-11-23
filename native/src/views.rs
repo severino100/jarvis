@@ -422,7 +422,7 @@ pub fn work(ui: &mut Ui, d: &Dashboard, acc: Accent, st: &mut HoursUi, board: &c
     });
     ui.add_space(14.0);
     if st.section == Section::All {
-        let cols_n = if ui.available_width() > 1150.0 { 4 } else { 2 };
+        let cols_n = if ui.available_width() > 1150.0 { 4 } else if ui.available_width() > 700.0 { 2 } else { 1 };
         let mine: Vec<(&Item, String, bool)> = d.mine_refined.iter().map(|it| (it, refined_sub(it), false)).collect();
         let now_cards: Vec<(&Item, String, bool)> = doing
             .iter()

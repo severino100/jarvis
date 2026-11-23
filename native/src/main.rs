@@ -5,6 +5,7 @@ mod agenda;
 mod ics;
 mod pack_kpi;
 mod pack_tab;
+mod pack_table;
 mod app;
 mod azdo;
 mod cleanup;

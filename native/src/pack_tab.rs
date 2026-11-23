@@ -15,6 +15,7 @@ use std::collections::HashMap;
 pub struct PackUi {
     pub inputs: HashMap<String, String>,
     pub kpis: crate::pack_kpi::Kpis,
+    pub tables: crate::pack_table::Tables,
 }
 
 /// What a click asks the app to do.
@@ -35,7 +36,10 @@ pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut PackUi, sprint: &str, acc: Accen
     if tab.kpis.is_some() {
         crate::pack_kpi::view(ui, tab, &mut st.kpis, acc);
     }
-    if tab.actions.is_empty() && tab.kpis.is_none() {
+    if tab.table.is_some() {
+        crate::pack_table::view(ui, tab, &mut st.tables, acc);
+    }
+    if tab.actions.is_empty() && tab.kpis.is_none() && tab.table.is_none() {
         ui_kit::quiet(ui, "Este separador do pacote ainda não tem ações.", acc);
     }
     for a in &tab.actions {

@@ -266,7 +266,6 @@ pub fn view(ui: &mut Ui, acc: Accent, voice_ready: (bool, bool)) -> bool {
         });
         row(ui, "Avisos", "", |ui| {
             ui.checkbox(&mut s.notify, "Notificações");
-            ui.checkbox(&mut s.inform_chat, "Mensagem na conversa do item quando algo muda no board ou num PR");
             ui.checkbox(&mut s.meeting_reminder, "Aviso 5 minutos antes de cada reunião");
         });
     });
