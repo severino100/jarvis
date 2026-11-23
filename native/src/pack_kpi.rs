@@ -25,6 +25,9 @@ struct Kpi {
     trend: Vec<(String, f64)>,
     group: String,
     error: String,
+    /// The card's button: its label and what it is about (both empty: no button).
+    action: String,
+    action_arg: String,
 }
 
 #[derive(Default)]
@@ -54,6 +57,11 @@ fn at<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value>
 
 fn text(v: &serde_json::Value, path: &str) -> String {
     at(v, path).map(|x| x.as_str().map(str::to_owned).unwrap_or_else(|| if x.is_null() { String::new() } else { x.to_string() })).unwrap_or_default()
+}
+
+/// Like `text`, but an empty path means nothing (not the whole object).
+fn opt(v: &serde_json::Value, path: &str) -> String {
+    if path.is_empty() { String::new() } else { text(v, path) }
 }
 
 /// Reads the numbers off the UI thread. Does nothing while a reading is running.
@@ -118,6 +126,8 @@ fn run(cfg: &crate::profile::KpiCfg, dir: Option<std::path::PathBuf>) -> Result<
                 .unwrap_or_default(),
             group: text(k, &cfg.group),
             error: text(k, &cfg.error),
+            action: opt(k, &cfg.action),
+            action_arg: opt(k, &cfg.action_arg),
         })
         .collect();
     Ok((items, text(&v, &cfg.title), text(&v, &cfg.updated)))
@@ -132,7 +142,10 @@ fn number(v: f64) -> String {
 }
 
 /// The KPI cards of a tab, grouped; read again when the pack's `refresh_minutes` have passed or on "Atualizar".
-pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut Kpis, acc: Accent) {
+/// Returns the request of a card's button when it was clicked: (conversation title, prompt).
+pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut Kpis, acc: Accent) -> Option<(String, String)> {
+    let mut asked: Option<(String, String)> = None;
+    let prompt = tab.kpis.as_ref().map(|c| c.action_prompt.clone()).unwrap_or_default();
     let state = st.tabs.entry(format!("{}/{}", tab.pack, tab.title)).or_default().clone();
     let every = tab.kpis.as_ref().map(|c| c.refresh_minutes).unwrap_or(0);
     let stale = state.lock().unwrap().at.is_none_or(|at| every > 0 && at.elapsed().as_secs() > every * 60);
@@ -158,6 +171,15 @@ pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut Kpis, acc: Accent) {
         ui_kit::hint(ui, e, true, acc);
         ui.add_space(8.0);
     }
+    if let Some(c) = tab.kpis.as_ref().filter(|c| c.layout == "dashboard") {
+        dashboard(ui, &s.items, &c.hero, acc);
+        drop(s);
+        if reload {
+            state.lock().unwrap().at = None;
+            ui.ctx().request_repaint();
+        }
+        return asked;
+    }
     let mut groups: Vec<&str> = Vec::new();
     for k in &s.items {
         if !groups.contains(&k.group.as_str()) {
@@ -173,7 +195,9 @@ pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut Kpis, acc: Accent) {
         for row in cards.chunks(per_row) {
             ui.columns(per_row, |cols| {
                 for (col, k) in cols.iter_mut().zip(row) {
-                    card(col, k, acc);
+                    if card(col, k, acc) {
+                        asked = Some((format!("{}: {} {}", tab.title, k.action, k.action_arg), prompt.replace("{arg}", &k.action_arg).replace("{label}", &k.label)));
+                    }
                 }
             });
             ui.add_space(8.0);
@@ -185,9 +209,12 @@ pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut Kpis, acc: Accent) {
         ui.ctx().request_repaint();
     }
     ui.add_space(6.0);
+    asked
 }
 
-fn card(ui: &mut Ui, k: &Kpi, acc: Accent) {
+/// One card; true when its button was clicked.
+fn card(ui: &mut Ui, k: &Kpi, acc: Accent) -> bool {
+    let mut clicked = false;
     let last = k.trend.last().map(|t| t.1);
     let prev = k.trend.len().checked_sub(2).and_then(|i| k.trend.get(i)).map(|t| t.1);
     let delta = last.zip(prev).map(|(a, b)| a - b).filter(|d| d.abs() >= 0.05);
@@ -197,7 +224,7 @@ fn card(ui: &mut Ui, k: &Kpi, acc: Accent) {
         _ => theme::MUTED,
     };
     ui_kit::hud_panel(ui, acc, !k.error.is_empty(), |ui| {
-        ui.set_min_height(112.0);
+        ui.set_min_height(if k.action.is_empty() { 112.0 } else { 168.0 });
         ui.set_width(ui.available_width());
         ui.label(RichText::new(k.label.to_uppercase()).font(ui_kit::display(11.5)).color(theme::MUTED).extra_letter_spacing(1.2));
         if !k.error.is_empty() {
@@ -220,7 +247,14 @@ fn card(ui: &mut Ui, k: &Kpi, acc: Accent) {
         if k.trend.len() > 1 {
             spark(ui, &k.trend, tone, acc);
         }
+        if !k.action.is_empty() {
+            ui.add_space(6.0);
+            if button(ui, &k.action, true, acc).clicked() {
+                clicked = true;
+            }
+        }
     });
+    clicked
 }
 
 /// The last readings as a small line with a dot on the newest, and their labels under the ends.
@@ -243,5 +277,122 @@ fn spark(ui: &mut Ui, trend: &[(String, f64)], tone: egui::Color32, acc: Accent)
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.label(RichText::new(&trend[trend.len() - 1].0).monospace().size(10.0).color(theme::FAINT));
         });
+    });
+}
+
+/* ---------- layout "dashboard" ---------- */
+
+fn tone_of(k: &Kpi) -> (Option<f64>, egui::Color32) {
+    let last = k.trend.last().map(|t| t.1);
+    let prev = k.trend.len().checked_sub(2).and_then(|i| k.trend.get(i)).map(|t| t.1);
+    let delta = last.zip(prev).map(|(a, b)| a - b).filter(|d| d.abs() >= 0.05);
+    let tone = match (delta, k.better.as_str()) {
+        (Some(d), "up") => if d > 0.0 { theme::GREEN } else { theme::AMBER },
+        (Some(d), "down") => if d < 0.0 { theme::GREEN } else { theme::AMBER },
+        _ => theme::MUTED,
+    };
+    (delta, tone)
+}
+
+fn big(k: &Kpi) -> String {
+    match k.value {
+        Some(v) => format!("{}{}", number(v), if k.unit.is_empty() { String::new() } else { format!(" {}", k.unit) }),
+        None => "—".to_owned(),
+    }
+}
+
+/// The trend as a thin line with a dot on the newest reading, inside `r`.
+fn mini_spark(ui: &Ui, r: egui::Rect, trend: &[(String, f64)], tone: egui::Color32) {
+    if trend.len() < 2 {
+        return;
+    }
+    let (lo, hi) = trend.iter().fold((f64::MAX, f64::MIN), |(a, b), t| (a.min(t.1), b.max(t.1)));
+    let span = (hi - lo).max(f64::EPSILON);
+    let pts: Vec<egui::Pos2> = trend
+        .iter()
+        .enumerate()
+        .map(|(i, t)| egui::pos2(r.left() + r.width() * i as f32 / (trend.len() - 1) as f32, r.bottom() - r.height() * ((t.1 - lo) / span) as f32))
+        .collect();
+    let p = ui.painter();
+    p.add(egui::Shape::line(pts.clone(), egui::Stroke::new(1.5, theme::alpha(tone, 0.85))));
+    if let Some(last) = pts.last() {
+        p.circle_filled(*last, 2.8, tone);
+    }
+}
+
+/// One KPI as a line of a panel: name, value, change since the last reading and the trend. The explanation is on hover.
+fn kpi_row(ui: &mut Ui, k: &Kpi, acc: Accent) {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 36.0), egui::Sense::hover());
+    let (delta, tone) = tone_of(k);
+    let (spark_w, delta_w, val_w) = (74.0, 52.0, 96.0);
+    let p = ui.painter();
+    p.line_segment([rect.left_bottom(), rect.right_bottom()], egui::Stroke::new(1.0, theme::alpha(acc.main, 0.08)));
+    let spark = egui::Rect::from_min_max(egui::pos2(rect.right() - spark_w, rect.top() + 9.0), egui::pos2(rect.right(), rect.bottom() - 9.0));
+    let delta_right = spark.left() - 10.0;
+    let val_right = delta_right - delta_w;
+    if !k.error.is_empty() {
+        p.text(egui::pos2(rect.right(), rect.center().y), egui::Align2::RIGHT_CENTER, "erro", egui::FontId::proportional(13.0), theme::AMBER);
+    } else {
+        p.text(egui::pos2(val_right, rect.center().y), egui::Align2::RIGHT_CENTER, big(k), egui::FontId::monospace(18.0), acc.light);
+        if let Some(d) = delta {
+            p.text(egui::pos2(delta_right, rect.center().y), egui::Align2::RIGHT_CENTER, format!("{}{}", if d > 0.0 { "+" } else { "" }, number(d)), egui::FontId::monospace(11.5), tone);
+        }
+        mini_spark(ui, spark, &k.trend, tone);
+    }
+    let mut job = egui::text::LayoutJob::simple(k.label.clone(), egui::FontId::proportional(13.5), theme::TEXT, (val_right - val_w - rect.left()).max(60.0));
+    job.wrap.max_rows = 1;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.ctx().fonts_mut(|f| f.layout_job(job));
+    ui.painter().galley(egui::pos2(rect.left(), rect.center().y - galley.size().y / 2.0), galley, theme::TEXT);
+    let tip = if k.error.is_empty() { k.detail.clone() } else { k.error.clone() };
+    if !tip.is_empty() {
+        resp.on_hover_text(format!("{}\n\n{}", k.label, tip));
+    }
+}
+
+/// The whole tab as a dashboard.
+fn dashboard(ui: &mut Ui, items: &[Kpi], hero: &str, acc: Accent) {
+    let mut groups: Vec<&str> = Vec::new();
+    for k in items {
+        if k.group != hero && !groups.contains(&k.group.as_str()) {
+            groups.push(&k.group);
+        }
+    }
+    // The big numbers.
+    let top: Vec<&Kpi> = items.iter().filter(|k| !hero.is_empty() && k.group == hero).collect();
+    if !top.is_empty() {
+        let per_row = ((ui.available_width() / 190.0).floor() as usize).clamp(1, top.len());
+        for row in top.chunks(per_row) {
+            ui.columns(per_row, |cols| {
+                for (col, k) in cols.iter_mut().zip(row) {
+                    ui_kit::hud_panel(col, acc, false, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.label(RichText::new(k.label.to_uppercase()).font(ui_kit::display(11.0)).color(theme::MUTED).extra_letter_spacing(1.2));
+                        ui.label(RichText::new(big(k)).monospace().size(34.0).strong().color(acc.light));
+                        if !k.detail.is_empty() {
+                            ui.add(egui::Label::new(RichText::new(&k.detail).small().color(theme::MUTED)).truncate());
+                        }
+                    });
+                }
+            });
+            ui.add_space(10.0);
+        }
+    }
+    // The panels, side by side: each group a panel, dealt out one column after the other.
+    let cols_n = ((ui.available_width() / 430.0).floor() as usize).clamp(1, 4);
+    ui.columns(cols_n, |cols| {
+        for (c, col) in cols.iter_mut().enumerate() {
+            for g in groups.iter().skip(c).step_by(cols_n) {
+                ui_kit::hud_panel(col, acc, false, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new(g.to_uppercase()).font(ui_kit::display(12.0)).color(acc.main).extra_letter_spacing(1.6));
+                    ui.add_space(4.0);
+                    for k in items.iter().filter(|k| k.group == *g) {
+                        kpi_row(ui, k, acc);
+                    }
+                });
+                col.add_space(10.0);
+            }
+        }
     });
 }
