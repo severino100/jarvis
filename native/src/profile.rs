@@ -193,6 +193,15 @@ pub struct KpiCfg {
     pub updated: String,
     /// Minutes before the numbers are read again on their own (0: only with the button).
     pub refresh_minutes: u64,
+    /// A button on a card: `action` is the path of its label (empty or missing on a card: no button), `action_arg` the path
+    /// of what goes into `{arg}`, and `action_prompt` the request sent to the AI when it is clicked (`{arg}` and `{label}` filled in).
+    pub action: String,
+    pub action_arg: String,
+    pub action_prompt: String,
+    /// "cards" (default: every group a section of cards) or "dashboard": the `hero` group as big numbers on top, the other
+    /// groups as panels side by side, one line per KPI with its trend.
+    pub layout: String,
+    pub hero: String,
 }
 
 /// One thing a pack tab can do: ask the AI (`prompt`) or open a link or file (`open`). `{input}` is what the person types in

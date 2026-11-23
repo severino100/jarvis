@@ -34,7 +34,9 @@ fn fill(text: &str, input: &str, sprint: &str) -> String {
 pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut PackUi, sprint: &str, acc: Accent) -> Option<Do> {
     let mut out = None;
     if tab.kpis.is_some() {
-        crate::pack_kpi::view(ui, tab, &mut st.kpis, acc);
+        if let Some((title, prompt)) = crate::pack_kpi::view(ui, tab, &mut st.kpis, acc) {
+            out = Some(Do::Ask(title, prompt));
+        }
     }
     if tab.table.is_some() {
         crate::pack_table::view(ui, tab, &mut st.tables, acc);
