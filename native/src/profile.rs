@@ -375,21 +375,6 @@ pub fn active_dirs() -> Vec<String> {
     p.active_packs.unwrap_or_default().into_iter().filter(|d| p.packs.contains(d)).collect()
 }
 
-pub fn is_active(dir: &str) -> bool {
-    active_dirs().iter().any(|d| d == dir)
-}
-
-/// Turns a pack on or off (a new one goes to the end of the order).
-pub fn set_active(dir: &str, on: bool) {
-    update(|x| {
-        let list = x.active_packs.get_or_insert_with(Vec::new);
-        list.retain(|d| d != dir);
-        if on {
-            list.push(dir.to_owned());
-        }
-    });
-}
-
 /// Every pack that is on and readable, in order.
 pub fn packs_active() -> Vec<Pack> {
     active_dirs().iter().filter_map(|d| read_pack(Path::new(d)).ok()).collect()

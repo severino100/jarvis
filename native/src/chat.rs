@@ -278,24 +278,6 @@ impl Chats {
         }
     }
 
-    /// A message from Jarvis itself (not Claude) about a change on the board or in a PR, in that conversation.
-    pub fn inform(&self, item_id: Option<i64>, pr_key: Option<&str>, title: &str, text: &str) -> String {
-        let found = self.with(|cs| {
-            cs.iter().find(|c| !c.handed_off && ((item_id.is_some() && c.item_id == item_id) || (pr_key.is_some() && c.pr_key.as_deref() == pr_key))).map(|c| c.id.clone())
-        });
-        let id = found.unwrap_or_else(|| self.create(Some(title.to_owned()), item_id, pr_key.map(str::to_owned)));
-        let mut inner = self.inner.lock().unwrap();
-        if let Some(c) = inner.chats.iter_mut().find(|c| c.id == id) {
-            c.messages.push(msg("inform", text));
-            c.updated_at = now();
-        }
-        Self::to_front(&mut inner, &id);
-        self.save(&inner);
-        drop(inner);
-        self.ctx.request_repaint();
-        id
-    }
-
     pub fn for_pr(&self, key: &str) -> Option<String> {
         self.with(|cs| cs.iter().find(|c| c.pr_key.as_deref() == Some(key) && !c.handed_off).map(|c| c.id.clone()))
     }
@@ -391,12 +373,6 @@ impl Chats {
         drop(inner);
         self.ctx.request_repaint();
         id
-    }
-
-    pub fn for_item(&self, item_id: i64) -> Option<String> {
-        self.with(|cs| {
-            cs.iter().find(|c| c.item_id == Some(item_id) && !c.handed_off).or_else(|| cs.iter().find(|c| c.item_id == Some(item_id))).map(|c| c.id.clone())
-        })
     }
 
     pub fn add_note(&self, id: &str, text: &str, role: &str) {

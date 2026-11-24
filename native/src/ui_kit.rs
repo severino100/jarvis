@@ -11,10 +11,6 @@ pub fn parse(iso: &str) -> Option<DateTime<Local>> {
     DateTime::parse_from_rfc3339(iso).ok().map(|d| d.with_timezone(&Local))
 }
 
-pub fn is_today(iso: &str) -> bool {
-    parse(iso).is_some_and(|d| d.date_naive() == Local::now().date_naive())
-}
-
 /// "agora mesmo", "há 12 min", "hoje 09:40", "ontem 17:02", "17 nov".
 pub fn when(iso: &str) -> String {
     let Some(d) = parse(iso) else { return String::new() };

@@ -142,7 +142,6 @@ struct When {
     all_day: bool,
     /// The `DTSTART`/`EXDATE` form that `rrule` reads, with the time zone normalized.
     tz: Option<chrono_tz::Tz>,
-    floating: bool,
 }
 
 fn parse_when(p: &Prop) -> Option<When> {
@@ -150,16 +149,16 @@ fn parse_when(p: &Prop) -> Option<When> {
     if p.param("VALUE") == Some("DATE") || (v.len() == 8 && !v.contains('T')) {
         let d = NaiveDate::parse_from_str(v, "%Y%m%d").ok()?;
         let at = d.and_hms_opt(0, 0, 0)?.and_local_timezone(Local).earliest()?;
-        return Some(When { at, all_day: true, tz: None, floating: true });
+        return Some(When { at, all_day: true, tz: None });
     }
     if let Some(z) = v.strip_suffix('Z') {
         let n = NaiveDateTime::parse_from_str(z, "%Y%m%dT%H%M%S").ok()?;
-        return Some(When { at: Utc.from_utc_datetime(&n).with_timezone(&Local), all_day: false, tz: Some(chrono_tz::UTC), floating: false });
+        return Some(When { at: Utc.from_utc_datetime(&n).with_timezone(&Local), all_day: false, tz: Some(chrono_tz::UTC) });
     }
     let n = NaiveDateTime::parse_from_str(v, "%Y%m%dT%H%M%S").ok()?;
     match p.param("TZID").and_then(tzid) {
-        Some(t) => Some(When { at: t.from_local_datetime(&n).earliest()?.with_timezone(&Local), all_day: false, tz: Some(t), floating: false }),
-        None => Some(When { at: n.and_local_timezone(Local).earliest()?, all_day: false, tz: None, floating: true }),
+        Some(t) => Some(When { at: t.from_local_datetime(&n).earliest()?.with_timezone(&Local), all_day: false, tz: Some(t) }),
+        None => Some(When { at: n.and_local_timezone(Local).earliest()?, all_day: false, tz: None }),
     }
 }
 

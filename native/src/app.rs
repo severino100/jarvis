@@ -975,65 +975,6 @@ impl JarvisApp {
         self.open_window(&id);
     }
 
-    /// Below the board on Hoje: today's meetings, open personal tasks and PRs waiting on me.
-    fn today_extras(&mut self, ui: &mut Ui, acc: theme::Accent, go: &mut Option<View>) {
-        ui.add_space(12.0);
-        let meetings = agenda::today_left(&self.agenda);
-        let todos: Vec<tasks::Todo> = {
-            let _ = self.tasks_ui.open_count();
-            tasks::open_list()
-        };
-        let pr_waiting: Vec<(String, i64, usize)> =
-            self.prs.with(|p| p.data.as_ref().map(|d| d.active.iter().filter(|x| !x.open_threads.is_empty()).map(|x| (x.title.clone(), x.id, x.open_threads.len())).collect()).unwrap_or_default());
-        ui.columns(3, |cols| {
-            ui_kit::section_label(&mut cols[0], "Agenda de hoje", acc.main, acc);
-            if meetings.is_empty() {
-                ui_kit::quiet(&mut cols[0], "Sem mais reuniões hoje.", acc);
-            }
-            for e in meetings.iter().take(5) {
-                let r = ui_kit::hud_panel(&mut cols[0], acc, false, |ui| {
-                    ui.label(RichText::new(e.start_at().map(|s| s.format("%H:%M").to_string()).unwrap_or_default()).monospace().color(acc.light));
-                    ui.add(egui::Label::new(RichText::new(&e.subject).strong().color(theme::BRIGHT)).truncate());
-                    if let Some(u) = e.teams_url() {
-                        if ui_kit::button(ui, "Entrar no Teams", false, acc).clicked() {
-                            brain::open(u);
-                        }
-                    }
-                });
-                let _ = r;
-                cols[0].add_space(6.0);
-            }
-            ui_kit::section_label(&mut cols[1], "Tarefas", acc.main, acc);
-            if todos.is_empty() {
-                ui_kit::quiet(&mut cols[1], "Sem tarefas pessoais abertas.", acc);
-            }
-            for t in todos.iter().take(6) {
-                cols[1].horizontal(|ui| {
-                    ui_kit::diamond(ui, false, acc.main, 4.0);
-                    ui.add(egui::Label::new(RichText::new(&t.title).color(theme::TEXT)).truncate());
-                });
-            }
-            if !todos.is_empty() && ui_kit::button(&mut cols[1], "Ver tarefas", false, acc).clicked() {
-                *go = Some(View::Tasks);
-            }
-            ui_kit::section_label(&mut cols[2], "PRs com comentários", acc.main, acc);
-            if pr_waiting.is_empty() {
-                ui_kit::quiet(&mut cols[2], "Nenhum PR à tua espera.", acc);
-            }
-            for (title, id, n) in &pr_waiting {
-                cols[2].horizontal(|ui| {
-                    ui.label(RichText::new(format!("!{id}")).monospace().color(theme::AMBER));
-                    ui.add(egui::Label::new(RichText::new(format!("{title} · {n} por resolver")).color(theme::TEXT)).truncate());
-                });
-            }
-            if !pr_waiting.is_empty() && ui_kit::button(&mut cols[2], "Ver PRs", false, acc).clicked() {
-                *go = Some(View::Prs);
-            }
-        });
-    }
-
-    /// The music player in a small window always on top (Definições keep it open across restarts). Closing it, or
-    /// "Voltar ao Hoje", puts the Música block back on Hoje.
     fn music_window(&mut self, ctx: &egui::Context, acc: theme::Accent) {
         if !settings::load().music_window {
             return;
