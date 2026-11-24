@@ -30,7 +30,7 @@ concurrency:
 jobs:
   release:
     # O commit de versão feito por este workflow não dispara outro release.
-    if: ${{ !startsWith(github.event.head_commit.message, 'chore: versão') }}
+    if: "${{ !startsWith(github.event.head_commit.message, 'chore: versão') }}"
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
