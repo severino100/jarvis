@@ -1,5 +1,5 @@
 # Em cada push e pull request para o main: compila o Jarvis, corre os testes e compila o instalador (para apanhar
-# erros no installer/jarvis.iss). Não publica nada; os releases são do release.yml.
+# erros no installer/jarvis.iss). Não publica nada; os releases são do release.yml, automáticos a partir do título do PR.
 name: build
 
 on:
