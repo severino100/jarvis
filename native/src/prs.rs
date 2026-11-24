@@ -285,6 +285,13 @@ impl Prs {
     }
 }
 
+/// Where the PR's repository lives: always under the projects folder set in Definições (never a guessed default).
+fn repo_path(pr: &Pr) -> std::path::PathBuf {
+    let base = crate::profile::projects_dir();
+    let dir = crate::profile::repos().into_iter().find(|r| r.dir.eq_ignore_ascii_case(&pr.repo)).map(|r| r.dir).unwrap_or_else(|| pr.repo.clone());
+    base.join(dir)
+}
+
 /// What Claude gets to fix review comments: the PR, the branch and every open comment (or just one thread).
 pub fn fix_prompt(pr: &Pr, thread_id: Option<i64>) -> String {
     let threads: Vec<&Thread> = match thread_id {
@@ -306,13 +313,14 @@ pub fn fix_prompt(pr: &Pr, thread_id: Option<i64>) -> String {
         .join("\n\n");
     let items = if pr.item_ids.is_empty() { String::new() } else { format!(", itens {}", pr.item_ids.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(", ")) };
     format!(
-        "Review do PR !{} \"{}\" (repositório {}, branch {} → {}{items}).\n\n{}:\n{body}\n\nAnalisa no código do branch {} (usa o worktree desse branch se existir; se não existir, prepara um a partir de origin/{} só depois do meu sim), explica o que o revisor pede e propõe a correção. Quando eu aprovar, prepara o pacote de passagem e termina com a linha de implementar.",
+        "Review do PR !{} \"{}\" (repositório {}, branch {} → {}{items}).\n\n{}:\n{body}\n\nO repositório está em {} (a pasta dos projetos definida nas Definições; não procures noutro sítio). Analisa no código do branch {} (usa o worktree desse branch se existir; se não existir, prepara um a partir de origin/{} só depois do meu sim), explica o que o revisor pede e propõe a correção. Quando eu aprovar, prepara o pacote de passagem e termina com a linha de implementar.",
         pr.id,
         pr.title,
         pr.repo,
         pr.source,
         pr.target,
         if threads.len() > 1 { "Comentários por resolver" } else { "Comentário" },
+        repo_path(pr).display(),
         pr.source,
         pr.source
     )
@@ -344,7 +352,7 @@ pub fn review_prompt(pr: &Pr) -> String {
         .collect();
     let existing = if existing.is_empty() { "Ainda não há comentários.".to_owned() } else { existing.join("\n") };
     let items = if pr.item_ids.is_empty() { String::new() } else { format!(", itens {}", pr.item_ids.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(", ")) };
-    let repo_dir = crate::profile::projects_dir().join(&pr.repo);
+    let repo_dir = repo_path(pr);
     format!(
         "Faz o review do PR !{id} \"{title}\" de {author} (repositório {repo}, branch {source} → {target}{items}).\n\n\
 ## Regras de review do repositório\n{rules}\n\n\

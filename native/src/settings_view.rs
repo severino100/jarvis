@@ -66,8 +66,8 @@ fn profile_panel(ui: &mut Ui, acc: Accent) {
             ui.label(RichText::new("Dito como").small().color(theme::MUTED));
             ui.add(egui::TextEdit::singleline(&mut p.spoken_name).hint_text("igual").desired_width(140.0));
         });
-        row(ui, "Pasta dos projetos", "Onde estão os teus repositórios. Os worktrees de cada item são criados aqui.", |ui| {
-            ui.label(RichText::new(&p.projects_dir).monospace().size(12.0).color(theme::MUTED));
+        row(ui, "Pasta dos projetos", "Onde estão os teus repositórios. Os worktrees de cada item e a resolução de comentários de PR usam esta pasta. Podes escrever o caminho ou escolher.", |ui| {
+            ui.add(egui::TextEdit::singleline(&mut p.projects_dir).font(egui::TextStyle::Monospace).desired_width(320.0));
             if button(ui, "Escolher…", false, acc).clicked() {
                 if let Some(d) = rfd::FileDialog::new().set_directory(&p.projects_dir).pick_folder() {
                     p.projects_dir = d.to_string_lossy().into_owned();
