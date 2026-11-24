@@ -58,4 +58,6 @@ Um pacote é uma pasta com um `jarvis.toml` (board, repositórios, convenção d
 
 O código está em [`native/`](native/) e a documentação técnica em [native/README.md](native/README.md). As regras da conversa estão em [`docs/`](docs/). Para compilar: Rust estável e Visual Studio Build Tools 2022 com C++; `cargo build --release` em `native/` e `scripts\install-native.ps1` instala o que compilaste no mesmo sítio que o instalador.
 
+Convenções de commits, branches, PRs e releases (para pessoas e agentes): [CONTRIBUTING.md](CONTRIBUTING.md).
+
 Cada push e pull request para o `main` compila, corre os testes e compila o instalador (Actions → build). Releases: uma tag `v*` (ou "Run workflow" em Actions → release) compila no Windows e publica o `Jarvis-Setup.exe`, o `jarvis.exe` e o `install.ps1` num release do GitHub; é daí que os Jarvis instalados se atualizam.
