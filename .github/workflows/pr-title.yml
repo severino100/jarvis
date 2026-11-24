@@ -1,0 +1,24 @@
+# O título do PR decide a versão do release (ver release.yml), por isso tem de ser Conventional Commits:
+# feat:, fix:, perf:, refactor:, chore:, docs:, ci:, test:, style:, build: (com ! ou BREAKING CHANGE para major).
+name: pr-title
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  titulo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validar o título
+        env:
+          TITULO: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$TITULO" | grep -Eq '^(feat|fix|perf|refactor|chore|docs|ci|test|style|build)(\([^)]+\))?!?: .+'; then
+            echo "::error::Título inválido: \"$TITULO\". Usa Conventional Commits, ex.: 'feat: botão novo' ou 'fix(prs): caminho do repositório'."
+            exit 1
+          fi
