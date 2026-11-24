@@ -47,6 +47,8 @@ pub struct Pr {
     pub repo: String,
     pub title: String,
     pub is_draft: bool,
+    /// Opened by me (the "Os meus" list).
+    pub mine: bool,
     pub author: String,
     /// My vote on it (10, 5, 0, -5, -10), when I am a reviewer.
     pub my_vote: i64,
@@ -171,6 +173,7 @@ fn details(pr: &Value, mine: &str) -> Pr {
         repo,
         title: s(&pr["title"]),
         is_draft: pr["isDraft"] == true,
+        mine: s(&pr["createdBy"]["id"]) == mine,
         author: s(&pr["createdBy"]["displayName"]),
         my_vote: pr["reviewers"].as_array().and_then(|rs| rs.iter().find(|r| s(&r["id"]) == mine)).and_then(|r| r["vote"].as_i64()).unwrap_or(0),
         source: branch(&pr["sourceRefName"]),
@@ -353,8 +356,14 @@ pub fn review_prompt(pr: &Pr) -> String {
     let existing = if existing.is_empty() { "Ainda não há comentários.".to_owned() } else { existing.join("\n") };
     let items = if pr.item_ids.is_empty() { String::new() } else { format!(", itens {}", pr.item_ids.iter().map(|i| format!("#{i}")).collect::<Vec<_>>().join(", ")) };
     let repo_dir = repo_path(pr);
+    // My own PR (usually a draft): a review before I publish it, comments only, never a vote on my own work.
+    let own = if pr.mine {
+        "\n\nEste PR é meu (em rascunho, se for o caso): é uma revisão antes de o publicar. Aponta o que devo corrigir antes de pedir review à equipa; no bloco final usa sempre `\"vote\":0` (não voto no meu próprio PR)."
+    } else {
+        ""
+    };
     format!(
-        "Faz o review do PR !{id} \"{title}\" de {author} (repositório {repo}, branch {source} → {target}{items}).\n\n\
+        "Faz o review do PR !{id} \"{title}\" de {author} (repositório {repo}, branch {source} → {target}{items}).{own}\n\n\
 ## Regras de review do repositório\n{rules}\n\n\
 ## Comentários que já lá estão\n{existing}\n\n\
 ## Como trabalhar\n\
@@ -367,7 +376,7 @@ Acaba a resposta com este bloco exato (JSON válido; `vote` é 10 aprovar, 5 apr
 Só comentários que valem a pena, claros e educados, em português de Portugal. Se eu pedir alterações, devolve o bloco outra vez, atualizado.",
         id = pr.id,
         title = pr.title,
-        author = if pr.author.is_empty() { "alguém" } else { &pr.author },
+        author = if pr.mine { "mim" } else if pr.author.is_empty() { "alguém" } else { &pr.author },
         repo = pr.repo,
         source = pr.source,
         target = pr.target,
@@ -680,6 +689,13 @@ pub fn view(ui: &mut Ui, prs: &Prs, acc: Accent) {
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
+                    if pr.is_draft
+                        && button(ui, "Rever com o Jarvis", pr.open_threads.len() <= 1, acc)
+                            .on_hover_text("Revê o teu rascunho antes de o publicares: o Jarvis lê o diff com as regras da equipa e propõe comentários (sem voto). Só publica depois de aprovares.")
+                            .clicked()
+                    {
+                        request_review(ui, &pr.key);
+                    }
                     if pr.open_threads.len() > 1 && button(ui, "Corrigir tudo", true, acc).clicked() {
                         request_fix(ui, &pr.key, None);
                     }
@@ -727,7 +743,7 @@ pub fn demo() -> Option<PrData> {
         ..Default::default()
     };
     Some(PrData {
-        active: vec![pr(3211, "Equipa.App", "Localização: manter disabled ao escolher fornecedor", "Rita Demo", 0)],
+        active: vec![Pr { mine: true, is_draft: true, ..pr(3211,"Equipa.App", "Localização: manter disabled ao escolher fornecedor", "Rita Demo", 0) }],
         to_review: vec![pr(3220, "Equipa.Api", "Exportação de fornecedores para Excel", "João Pereira", 0), pr(3224, "Equipa.App", "NIF na ficha do cliente", "Ana Silva", 5)],
         recent: Vec::new(),
     })
@@ -770,5 +786,8 @@ mod tests {
         let p = review_prompt(&pr);
         assert!(p.contains("[[REVIEW]]") && p.contains("\"pr\":\"r:7\""));
         assert!(p.contains("Não publiques nada"));
+        assert!(!p.contains("Este PR é meu"));
+        let own = review_prompt(&Pr { mine: true, is_draft: true, ..pr });
+        assert!(own.contains("Este PR é meu") && own.contains("\"vote\":0"));
     }
 }
