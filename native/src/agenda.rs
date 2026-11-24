@@ -403,16 +403,6 @@ pub fn view(ui: &mut Ui, agenda: &Agenda, st: &mut AgendaUi, acc: Accent) {
     }
 }
 
-/// Today's remaining meetings, for the Hoje screen.
-pub fn today_left(agenda: &Agenda) -> Vec<Event> {
-    let today = Local::now().date_naive();
-    let now = Local::now();
-    agenda
-        .week(monday(today), false)
-        .map(|w| w.events.into_iter().filter(|e| !e.all_day && e.start_at().is_some_and(|s| s.date_naive() == today) && e.end_at().is_some_and(|en| en > now)).collect())
-        .unwrap_or_default()
-}
-
 
 /// All of today's meetings (past ones too), for the start screen's timeline.
 pub fn today_all(agenda: &Agenda) -> Vec<Event> {

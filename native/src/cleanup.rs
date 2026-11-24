@@ -31,7 +31,6 @@ pub enum Level {
 pub struct Worktree {
     pub path: String,
     pub branch: Option<String>,
-    pub repo: String,
     pub repo_dir: String,
     /// The repository's node_modules is shared with its worktrees through a junction.
     pub linked: bool,
@@ -94,7 +93,6 @@ fn list(r: &crate::profile::RepoCfg) -> Vec<Worktree> {
             Some(Worktree {
                 path,
                 branch,
-                repo: repo.clone(),
                 repo_dir: dir.clone(),
                 linked,
                 name: format!("{repo}-{suffix}"),
