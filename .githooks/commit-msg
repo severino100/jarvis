@@ -1,0 +1,20 @@
+#!/bin/sh
+# Conventional Commits: o título decide a versão do release (ver .github/workflows/release.yml).
+# Ativa-se com scripts/setup-hooks.ps1 (git config core.hooksPath .githooks).
+msg=$(head -n1 "$1")
+case "$msg" in Merge\ *|Revert\ *|fixup!\ *|squash!\ *) exit 0 ;; esac
+if ! printf '%s' "$msg" | grep -Eq '^(feat|fix|perf|refactor|chore|docs|ci|test|style|build)(\([^)]+\))?!?: .+'; then
+  cat >&2 <<MSG
+Mensagem de commit inválida: "$msg"
+
+Usa Conventional Commits: <tipo>(<âmbito opcional>): <descrição>
+  tipos: feat fix perf refactor chore docs ci test style build
+  exemplos: feat: botão novo | fix(prs): caminho do repositório | feat!: muda o formato do perfil
+  (feat -> versão minor, fix/perf/refactor -> patch, ! ou BREAKING CHANGE -> major, o resto não gera release)
+MSG
+  exit 1
+fi
+if [ "$(printf '%s' "$msg" | wc -c)" -gt 100 ]; then
+  echo "O título do commit tem mais de 100 caracteres." >&2
+  exit 1
+fi
