@@ -1,46 +1,101 @@
-# A tag v* (ex.: v0.2.0) compila o Jarvis no Windows e publica um release com o Jarvis-Setup.exe (o instalador que
-# se passa às pessoas), o jarvis.exe e o install.ps1 (que descarrega o jarvis.exe do release).
+# Release automático. Quando um PR é integrado no main, o título do PR (Conventional Commits) decide a versão (SemVer):
+#   feat!: / BREAKING CHANGE -> major | feat: -> minor | fix:, perf:, refactor: -> patch
+#   chore:, docs:, ci:, test:, style:, build: -> sem versão nem release
+# Se houver subida: atualiza native/Cargo.toml e Cargo.lock, compila, cria o instalador, faz commit
+# "chore: versão X.Y.Z" + tag vX.Y.Z no main e publica o release com o Jarvis-Setup.exe, o jarvis.exe e o
+# install.ps1 (é daí que os Jarvis instalados se atualizam).
+# "Run workflow" em Actions permite forçar major/minor/patch à mão.
 name: release
 
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Tag do release (ex.: v0.2.0)'
-        required: true
+      bump:
+        description: 'Subida de versão'
+        type: choice
+        options: [patch, minor, major]
+        default: patch
 
 permissions:
   contents: write
+  pull-requests: read
+
+# Um release de cada vez, por ordem (nunca cancela um a meio).
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 jobs:
-  build:
+  release:
+    # O commit de versão feito por este workflow não dispara outro release.
+    if: ${{ !startsWith(github.event.head_commit.message, 'chore: versão') }}
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decidir a versão
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCAR: ${{ github.event.inputs.bump }}
+        run: |
+          $titulo = ''; $corpo = ''
+          if (-not $env:FORCAR) {
+            # O PR integrado neste commit (merge, squash ou rebase); sem PR, a mensagem do próprio commit.
+            $pr = gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/pulls" --jq '.[0] | select(.) | {title, body}' | ConvertFrom-Json
+            if ($pr) { $titulo = $pr.title; $corpo = [string]$pr.body }
+            else { $titulo = (git log -1 --format=%s); $corpo = (git log -1 --format=%b) -join "`n" }
+          }
+          Write-Host "Título: $titulo"
+          $nova = & scripts\bump-version.ps1 -Titulo $titulo -Corpo $corpo -Forcar "$env:FORCAR"
+          if ($nova) {
+            "version=$nova" >> $env:GITHUB_OUTPUT
+            Write-Host "Nova versão: $nova"
+          } else {
+            Write-Host 'Sem subida de versão: não há release.'
+          }
 
       - uses: dtolnay/rust-toolchain@stable
+        if: steps.v.outputs.version
 
       - uses: Swatinem/rust-cache@v2
+        if: steps.v.outputs.version
         with:
           workspaces: native
 
       - name: Compilar
+        if: steps.v.outputs.version
         working-directory: native
         run: cargo build --release --locked
 
       - name: Instalador (Jarvis-Setup.exe)
+        if: steps.v.outputs.version
         run: |
           choco upgrade innosetup -y --no-progress
           & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /Q installer\jarvis.iss
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
+      # Só depois de compilar tudo: se algo falhar, o main não fica com uma versão sem release.
+      - name: Commit da versão e tag
+        if: steps.v.outputs.version
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add native/Cargo.toml native/Cargo.lock
+          git commit -m "chore: versão ${{ steps.v.outputs.version }}"
+          git tag "v${{ steps.v.outputs.version }}"
+          git push origin HEAD:main "v${{ steps.v.outputs.version }}"
+
       - name: Publicar o release
+        if: steps.v.outputs.version
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          name: Jarvis ${{ github.event.inputs.tag || github.ref_name }}
+          tag_name: v${{ steps.v.outputs.version }}
+          name: Jarvis v${{ steps.v.outputs.version }}
           generate_release_notes: true
           files: |
             installer/Output/Jarvis-Setup.exe
