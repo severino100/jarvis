@@ -202,6 +202,10 @@ pub struct KpiCfg {
     /// groups as panels side by side, one line per KPI with its trend.
     pub layout: String,
     pub hero: String,
+    /// Filter chips above the cards: `filter` is the path of each card's tag (e.g. its sprint), `filters` the optional path of the
+    /// top-level list of tags in the order to show them. "Todos" plus one chip per tag; several tags can be on at once.
+    pub filter: String,
+    pub filters: String,
 }
 
 /// One thing a pack tab can do: ask the AI (`prompt`) or open a link or file (`open`). `{input}` is what the person types in

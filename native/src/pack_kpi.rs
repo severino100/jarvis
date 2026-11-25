@@ -28,12 +28,16 @@ struct Kpi {
     /// The card's button: its label and what it is about (both empty: no button).
     action: String,
     action_arg: String,
+    /// The tag the filter chips select by (empty: no filter).
+    filter: String,
 }
 
 #[derive(Default)]
 struct State {
     loading: bool,
     items: Vec<Kpi>,
+    /// The filter tags in the order the pack gave them (empty: in order of appearance).
+    filters: Vec<String>,
     title: String,
     updated: String,
     error: Option<String>,
@@ -46,6 +50,8 @@ type Shared = Arc<Mutex<State>>;
 #[derive(Default)]
 pub struct Kpis {
     tabs: HashMap<String, Shared>,
+    /// The filter chips switched on, by "<pack>/<tab>" (none: every card).
+    picked: HashMap<String, Vec<String>>,
 }
 
 fn at<'a>(v: &'a serde_json::Value, path: &str) -> Option<&'a serde_json::Value> {
@@ -80,8 +86,9 @@ fn load(tab: &TabCfg, state: &Shared, ctx: &egui::Context) {
         let result = run(&cfg, dir);
         let mut s = state.lock().unwrap();
         match result {
-            Ok((items, title, updated)) => {
+            Ok((items, title, updated, filters)) => {
                 s.items = items;
+                s.filters = filters;
                 s.title = title;
                 s.updated = updated;
                 s.error = None;
@@ -96,7 +103,7 @@ fn load(tab: &TabCfg, state: &Shared, ctx: &egui::Context) {
 }
 
 /// The command runs in the pack's folder with the same environment as the skills (the board variables and the token).
-fn run(cfg: &crate::profile::KpiCfg, dir: Option<std::path::PathBuf>) -> Result<(Vec<Kpi>, String, String), String> {
+fn run(cfg: &crate::profile::KpiCfg, dir: Option<std::path::PathBuf>) -> Result<(Vec<Kpi>, String, String, Vec<String>), String> {
     use std::os::windows::process::CommandExt;
     let dir = dir.ok_or("O pacote deste separador já não está ligado.")?;
     let mut words = cfg.run.split_whitespace();
@@ -128,9 +135,15 @@ fn run(cfg: &crate::profile::KpiCfg, dir: Option<std::path::PathBuf>) -> Result<
             error: text(k, &cfg.error),
             action: opt(k, &cfg.action),
             action_arg: opt(k, &cfg.action_arg),
+            filter: opt(k, &cfg.filter),
         })
         .collect();
-    Ok((items, text(&v, &cfg.title), text(&v, &cfg.updated)))
+    let filters = if cfg.filters.is_empty() {
+        Vec::new()
+    } else {
+        at(&v, &cfg.filters).and_then(|l| l.as_array()).map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_owned)).collect()).unwrap_or_default()
+    };
+    Ok((items, text(&v, &cfg.title), text(&v, &cfg.updated), filters))
 }
 
 fn number(v: f64) -> String {
@@ -180,17 +193,53 @@ pub fn view(ui: &mut Ui, tab: &TabCfg, st: &mut Kpis, acc: Accent) -> Option<(St
         }
         return asked;
     }
+    // Filter chips: "Todos" plus one per tag; several can be on at once, none on means every card.
+    let filter_on = tab.kpis.as_ref().is_some_and(|c| !c.filter.is_empty());
+    let key = format!("{}/{}", tab.pack, tab.title);
+    let mut picked = st.picked.get(&key).cloned().unwrap_or_default();
+    if filter_on {
+        let mut tags: Vec<String> = s.filters.clone();
+        for k in &s.items {
+            if !k.filter.is_empty() && !tags.contains(&k.filter) {
+                tags.push(k.filter.clone());
+            }
+        }
+        picked.retain(|p| tags.contains(p));
+        ui.horizontal_wrapped(|ui| {
+            if button(ui, &format!("Todos · {}", s.items.len()), picked.is_empty(), acc).clicked() {
+                picked.clear();
+            }
+            for t in &tags {
+                let n = s.items.iter().filter(|k| &k.filter == t).count();
+                if n > 0 && button(ui, &format!("{t} · {n}"), picked.contains(t), acc).clicked() {
+                    match picked.iter().position(|p| p == t) {
+                        Some(i) => {
+                            picked.remove(i);
+                        }
+                        None => picked.push(t.clone()),
+                    }
+                }
+            }
+        });
+        ui.add_space(8.0);
+        st.picked.insert(key, picked.clone());
+    }
+    let shown: Vec<&Kpi> = s.items.iter().filter(|k| picked.is_empty() || picked.contains(&k.filter)).collect();
+    if filter_on && shown.is_empty() {
+        ui_kit::quiet(ui, "Nada com esta seleção.", acc);
+    }
     let mut groups: Vec<&str> = Vec::new();
-    for k in &s.items {
+    for k in &shown {
         if !groups.contains(&k.group.as_str()) {
             groups.push(&k.group);
         }
     }
     for g in groups {
+        let cards: Vec<&Kpi> = shown.iter().copied().filter(|k| k.group == g).collect();
         if !g.is_empty() {
-            ui_kit::section_label(ui, g, acc.main, acc);
+            let label = if filter_on { format!("{g} ({})", cards.len()) } else { g.to_owned() };
+            ui_kit::section_label(ui, &label, acc.main, acc);
         }
-        let cards: Vec<&Kpi> = s.items.iter().filter(|k| k.group == g).collect();
         let per_row = ((ui.available_width() / 300.0).floor() as usize).clamp(1, 8);
         for row in cards.chunks(per_row) {
             ui.columns(per_row, |cols| {
